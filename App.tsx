@@ -1,20 +1,31 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useEffect } from 'react';
+import * as Updates from 'expo-updates';
+import { AdminLoginController } from './src/controlllers/AdminLoginController';
 
 export default function App() {
-  return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
-  );
-}
+  useEffect(() => {
+    async function fetchAndApplyUpdate() {
+      try {
+        // 1. Check Expo servers for a new OTA update
+        const update = await Updates.checkForUpdateAsync();
+        
+        if (update.isAvailable) {
+          // 2. Download the bundle
+          await Updates.fetchUpdateAsync();
+          
+          // 3. Immediately reload the app with the new code live!
+          await Updates.reloadAsync();
+        }
+      } catch (error) {
+        // If offline or request fails, open app normally
+        console.log('Error checking for updates:', error);
+      }
+    }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
+    if (!__DEV__) {
+      fetchAndApplyUpdate();
+    }
+  }, []);
+
+  return <AdminLoginController />;
+}
