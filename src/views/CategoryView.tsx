@@ -168,7 +168,6 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
 
 export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToken }) => {
   const [serverGroups, setServerGroups] = useState<ServerCategoryGroup[]>([]);
-  const [backendCategoryFilteredProducts, setBackendCategoryFilteredProducts] = useState<CatalogProductItem[] | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const [categoriesList, setCategoriesList] = useState<string[]>([]);
@@ -223,10 +222,10 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         if (tokenToUse && isMounted) {
           await syncInventoryFromServer(tokenToUse.trim());
         } else {
-          setIsLoading(false);
+          if (isMounted) setIsLoading(false);
         }
       } catch (err) {
-        setIsLoading(false);
+        if (isMounted) setIsLoading(false);
       }
     };
 
@@ -296,9 +295,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         });
         setCategoryMetadataMap(dynamicMap);
         
-        if (extractedCategories.length > 0) {
-          const firstCatName = extractedCategories[0];
-          setSelectedCategory(firstCatName);
+        if (Array.isArray(extractedCategories) && extractedCategories.length > 0) {
+          setSelectedCategory(String(extractedCategories[0]));
         }
       }
     } catch (err) {
@@ -310,7 +308,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   const handleCategoryClick = (categoryName: string) => {
     setSelectedCategory(categoryName);
-    setBackendCategoryFilteredProducts(null);
   };
 
   const toggleProductVisibility = useCallback(async (shopProductId: number, currentActiveState: boolean) => {
@@ -565,16 +562,19 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     setTempVariantsList(prev => (Array.isArray(prev) ? prev : []).filter((_, idx) => idx !== indexToRemove));
   }, []);
 
+  const safeCategories = Array.isArray(categoriesList) ? categoriesList : [];
+  
   const filteredGridProducts = useMemo(() => {
     const groups = Array.isArray(serverGroups) ? serverGroups : [];
     if (groups.length === 0) return [];
     
+    const activeCat = selectedCategory || (safeCategories.length > 0 ? safeCategories[0] : "");
     const matchedGroup = groups.find(
-      group => group && group.categoryName === selectedCategory
+      group => group && group.categoryName === activeCat
     ) || groups[0];
     
     return matchedGroup && Array.isArray(matchedGroup.products) ? matchedGroup.products : [];
-  }, [serverGroups, selectedCategory]);
+  }, [serverGroups, selectedCategory, safeCategories]);
 
   const gridAvailableWidth = useMemo(() => {
     return showSidebar ? (windowWidth - 95) : windowWidth;
@@ -596,8 +596,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     }
     return `item_fallback_${index}`;
   }, []);
-
-  const safeCategories = Array.isArray(categoriesList) ? categoriesList : [];
 
   return (
     <SafeAreaView style={styles.viewMainWrapper} edges={['top', 'bottom']}>
