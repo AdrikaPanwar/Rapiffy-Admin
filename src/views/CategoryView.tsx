@@ -367,6 +367,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     
     if (!fastToken) return;
 
+    // 1. Instantly update local UI state silently without triggering screen blinking / loading spinners
     setServerGroups(prevGroups => (Array.isArray(prevGroups) ? prevGroups : []).map(group => ({
       ...group,
       products: Array.isArray(group.products) 
@@ -374,8 +375,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         : []
     })));
 
-    setBackendCategoryFilteredProducts(prev => (Array.isArray(prev) ? prev : []).map(p => p.shopProductId === shopProductId ? { ...p, active: nextActiveState } : p));
+    setBackendCategoryFilteredProducts(prev => 
+      prev !== null ? prev.map(p => p.shopProductId === shopProductId ? { ...p, active: nextActiveState } : p) : null
+    );
 
+    // 2. Silent backend patch request
     try {
       await fetch(`${BASE_URL}/v1/admin/catalog/visibility/${shopProductId}?active=${nextActiveState}`, {
         method: 'PATCH',
@@ -385,7 +389,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         }
       });
     } catch (error) {
-      if (fastToken) syncInventoryFromServer(fastToken.trim());
+      console.log("Visibility sync error:", error);
     }
   }, [authToken]);
 
@@ -964,7 +968,6 @@ const styles = StyleSheet.create({
   centerModalBackgroundOverlay: { flex: 1, backgroundColor: 'rgba(43, 30, 26, 0.4)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   productDialogBoxFrame: { width: '100%', maxHeight: '88%', backgroundColor: '#FFFFFF', borderRadius: 16, padding: 16, elevation: 12 },
   drawerHeaderFrame: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#F0E2D3' },
-  drawerTitleTest: { fontSize: 15, fontWeight: '800', color: '#2B1E1A' },
   drawerTitleText: { fontSize: 15, fontWeight: '800', color: '#2B1E1A' },
   closeDrawerIconText: { fontSize: 18, color: '#5C4033', padding: 4 },
   inputLabelField: { fontSize: 11, fontWeight: '700', color: '#5C4033', marginTop: 10, marginBottom: 4 },
