@@ -90,6 +90,10 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
   if (!item) return null;
 
   const isVisible = item.active !== false;
+  const safeName = String(item.productName || 'Product');
+  const safeBrand = String(item.brand || 'General');
+  const safeUnitVal = String(item.unitValue || '');
+  const safeUnitType = String(item.unit || '');
 
   return (
     <TouchableOpacity 
@@ -140,19 +144,19 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
       </View>
 
       <View style={styles.blankImageSectionPlaceholder}>
-        {item.imageUrl && item.imageUrl !== "string" ? (
+        {item.imageUrl && typeof item.imageUrl === 'string' && item.imageUrl.startsWith('http') ? (
           <Image source={{ uri: item.imageUrl }} style={styles.catalogRenderedImage} />
         ) : (
           <View style={styles.zeptoCoreAssetCircle}>
-            <Text style={styles.assetFrameChar}>{item.productName ? item.productName.charAt(0) : 'P'}</Text>
+            <Text style={styles.assetFrameChar}>{safeName.charAt(0).toUpperCase()}</Text>
           </View>
         )}
       </View>
 
       <View style={styles.productDetailMetaFrame}>
-        <Text style={styles.brandMetaLabel} numberOfLines={1}>{item.brand}</Text>
-        <Text style={styles.productNameLabel} numberOfLines={2}>{item.productName}</Text>
-        <Text style={styles.unitScaleTag}>{item.unitValue} {item.unit}</Text>
+        <Text style={styles.brandMetaLabel} numberOfLines={1}>{safeBrand}</Text>
+        <Text style={styles.productNameLabel} numberOfLines={2}>{safeName}</Text>
+        <Text style={styles.unitScaleTag}>{safeUnitVal} {safeUnitType}</Text>
         <View style={styles.pricingRowStack}>
           <Text style={styles.sellingPriceVal}>₹{item.sellingPrice ?? 0}</Text>
           <Text style={styles.mrpCrossedVal}>₹{item.mrp ?? 0}</Text>
@@ -165,7 +169,7 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
 export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToken }) => {
   const [serverGroups, setServerGroups] = useState<ServerCategoryGroup[]>([]);
   const [backendCategoryFilteredProducts, setBackendCategoryFilteredProducts] = useState<CatalogProductItem[] | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const [categoriesList, setCategoriesList] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
@@ -210,17 +214,19 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   useEffect(() => {
     let isMounted = true;
     const fetchFreshJwtAndSync = async () => {
-      if (!isMounted) return;
-      
-      let tokenToUse = authToken;
-      if (!tokenToUse) {
-        tokenToUse = await AsyncStorage.getItem('user_auth_token') || undefined;
-      }
+      try {
+        let tokenToUse = authToken;
+        if (!tokenToUse) {
+          tokenToUse = (await AsyncStorage.getItem('user_auth_token')) || undefined;
+        }
 
-      if (tokenToUse) {
-        syncInventoryFromServer(tokenToUse.trim());
-      } else {
-        Alert.alert("JWT Token Missing", "Please log in again to generate a valid JWT token.");
+        if (tokenToUse && isMounted) {
+          await syncInventoryFromServer(tokenToUse.trim());
+        } else {
+          setIsLoading(false);
+        }
+      } catch (err) {
+        setIsLoading(false);
       }
     };
 
@@ -231,8 +237,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const syncInventoryFromServer = async (resolvedToken: string) => {
     setIsLoading(true);
     try {
-      console.log("SENDING TOKEN HEADER:", `Bearer ${resolvedToken}`);
-
       const response = await fetch(`${BASE_URL}/v1/admin/catalog/my-products`, {
         method: 'GET',
         headers: {
@@ -241,28 +245,37 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         }
       });
 
-      console.log("RESPONSE STATUS:", response.status);
+      if (!response.ok) {
+        setIsLoading(false);
+        return;
+      }
 
-      const itemsData = await response.json();
-      console.log("RAW BACKEND JSON RESPONSE:", JSON.stringify(itemsData, null, 2));
+      const responseText = await response.text();
+      let itemsData: any = [];
+      try {
+        itemsData = JSON.parse(responseText);
+      } catch (parseError) {
+        setIsLoading(false);
+        return;
+      }
 
-      if (response.status === 200 && Array.isArray(itemsData)) {
+      if (Array.isArray(itemsData)) {
         const normalizedGroups: ServerCategoryGroup[] = itemsData.map((group: any) => {
           let extractedProducts: CatalogProductItem[] = [];
 
-          if (Array.isArray(group.subCategories)) {
+          if (group && Array.isArray(group.subCategories)) {
             group.subCategories.forEach((sub: any) => {
-              if (Array.isArray(sub.products)) {
+              if (sub && Array.isArray(sub.products)) {
                 extractedProducts = [...extractedProducts, ...sub.products];
               }
             });
-          } else if (Array.isArray(group.products)) {
+          } else if (group && Array.isArray(group.products)) {
             extractedProducts = group.products;
           }
 
           return {
-            categoryId: group.categoryId,
-            categoryName: group.categoryName,
+            categoryId: group?.categoryId,
+            categoryName: group?.categoryName ? String(group.categoryName) : 'General',
             products: extractedProducts
           };
         });
@@ -277,7 +290,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
         const dynamicMap: Record<string, number> = {};
         normalizedGroups.forEach((group) => {
-          if (group.categoryId) {
+          if (group.categoryName && group.categoryId) {
             dynamicMap[group.categoryName] = group.categoryId;
           }
         });
@@ -286,114 +299,43 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         if (extractedCategories.length > 0) {
           const firstCatName = extractedCategories[0];
           setSelectedCategory(firstCatName);
-          
-          const firstCatId = dynamicMap[firstCatName];
-          if (firstCatId) {
-            fetchCategoryByIdWithFallback(firstCatId, resolvedToken);
-          }
         }
-      } else if (response.status === 401 || response.status === 403) {
-        Alert.alert("JWT Token Invalid", "The session JWT token was rejected by backend server.");
-      } else {
-        setCategoriesList([]);
       }
     } catch (err) {
-      setCategoriesList([]);
-      console.log("Network parsing structural catch:", err);
+      console.log("Sync error:", err);
     } finally {
       setIsLoading(false);
     }
   };
 
-  /*
-    NOTE / COMMENT: 
-    The endpoint GET /v1/admin/catalog/my-products/{categoryId} is currently returning a 500 Server Error
-    (NoResourceFoundException) on backend side.
-    This helper function attempts to fetch category-filtered data from that API if available.
-    If it fails, it gracefully falls back to displaying the original loaded data array from serverGroups.
-  */
-  const fetchCategoryByIdWithFallback = async (catId: number, overrideToken?: string) => {
-    try {
-      const token = overrideToken || authToken || await AsyncStorage.getItem('user_auth_token');
-      if (!token) return;
-
-      const response = await fetch(`${BASE_URL}/v1/admin/catalog/my-products/${catId}`, {
-        method: 'GET',
-        headers: {
-          'accept': '*/*',
-          'Authorization': `Bearer ${token.trim()}`
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        let extracted: CatalogProductItem[] = [];
-
-        if (Array.isArray(data.products)) {
-          extracted = data.products;
-        } else if (Array.isArray(data.subCategories)) {
-          data.subCategories.forEach((sub: any) => {
-            if (Array.isArray(sub.products)) extracted = [...extracted, ...sub.products];
-          });
-        } else if (Array.isArray(data)) {
-          extracted = data;
-        }
-
-        setBackendCategoryFilteredProducts(extracted);
-      } else {
-        setBackendCategoryFilteredProducts(null);
-      }
-    } catch (error) {
-      setBackendCategoryFilteredProducts(null);
-    }
-  };
-
   const handleCategoryClick = (categoryName: string) => {
     setSelectedCategory(categoryName);
-    const catId = categoryMetadataMap[categoryName];
-    if (catId) {
-      fetchCategoryByIdWithFallback(catId);
-    } else {
-      setBackendCategoryFilteredProducts(null);
-    }
+    setBackendCategoryFilteredProducts(null);
   };
 
   const toggleProductVisibility = useCallback(async (shopProductId: number, currentActiveState: boolean) => {
     const nextActiveState = !currentActiveState;
-    const fastToken = authToken || await AsyncStorage.getItem('user_auth_token');
+    const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
     
-    if (!fastToken) {
-      Alert.alert("Unauthorized", "Session JWT token missing.");
-      return;
-    }
+    if (!fastToken) return;
 
     setServerGroups(prevGroups => prevGroups.map(group => ({
       ...group,
-      products: group.products.map(prod => 
-        prod.shopProductId === shopProductId 
-          ? { ...prod, active: nextActiveState }
-          : prod
-      )
+      products: Array.isArray(group.products) 
+        ? group.products.map(prod => prod.shopProductId === shopProductId ? { ...prod, active: nextActiveState } : prod)
+        : []
     })));
 
-    setBackendCategoryFilteredProducts(prev => prev ? prev.map(p => p.shopProductId === shopProductId ? { ...p, active: nextActiveState } : p) : null);
-
     try {
-      const response = await fetch(`${BASE_URL}/v1/admin/catalog/visibility/${shopProductId}?active=${nextActiveState}`, {
+      await fetch(`${BASE_URL}/v1/admin/catalog/visibility/${shopProductId}?active=${nextActiveState}`, {
         method: 'PATCH',
         headers: {
           'accept': '*/*',
           'Authorization': `Bearer ${fastToken.trim()}`
         }
       });
-
-      if (!response.ok) {
-        if (fastToken) syncInventoryFromServer(fastToken.trim());
-        Alert.alert("Visibility Update Failed", "Server rejected the request.");
-      }
     } catch (error) {
       if (fastToken) syncInventoryFromServer(fastToken.trim());
-      Alert.alert("Network Error", "Could not reach server.");
     }
   }, [authToken]);
 
@@ -446,10 +388,10 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     setProdStockQty(item.stockQuantity != null ? item.stockQuantity.toString() : '0');
     setProdThresholdQty(item.thresholdQuantity != null ? item.thresholdQuantity.toString() : '0');
     setProdExpiryDate(item.expiryDate || '2026-07-26');
-    setProdHasVariants(!!item.hasVariants || (item.variants && item.variants.length > 0));
+    setProdHasVariants(!!item.hasVariants || (Array.isArray(item.variants) && item.variants.length > 0));
     setProductImageTarget(item.imageUrl === "string" ? null : item.imageUrl);
     
-    setTempVariantsList(item.variants || []);
+    setTempVariantsList(Array.isArray(item.variants) ? item.variants : []);
     setVariantImageTarget(null);
     
     InteractionManager.runAfterInteractions(() => {
@@ -495,24 +437,21 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       return;
     }
 
-    const fastToken = authToken || await AsyncStorage.getItem('user_auth_token');
-    if (!fastToken) {
-      Alert.alert("Unauthorized", "Session JWT token missing.");
-      return;
-    }
+    const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
+    if (!fastToken) return;
 
     const resolvedCategoryId = categoryMetadataMap[selectedCategory] || 1;
 
     const itemPayload = {
       categoryId: resolvedCategoryId,
       productName: prodNameInput.trim(),
-      sellingPrice: parseFloat(prodPriceInput),
+      sellingPrice: parseFloat(prodPriceInput) || 0,
       stockQuantity: parseInt(prodStockQty) || 0,
       shortDescription: prodShortDesc.trim() || 'string',
       longDescription: prodLongDesc.trim() || 'string',
       brand: prodBrandInput.trim() || 'string',
       imageUrl: productImageTarget || "string", 
-      mrp: parseFloat(prodMrpInput) || parseFloat(prodPriceInput),
+      mrp: parseFloat(prodMrpInput) || parseFloat(prodPriceInput) || 0,
       thresholdQuantity: parseInt(prodThresholdQty) || 0,
       unit: prodUnitType || 'string',
       unitValue: prodUnitVal || 'string',
@@ -520,13 +459,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       hasVariants: prodHasVariants || tempVariantsList.length > 0,
       variants: (prodHasVariants || tempVariantsList.length > 0) ? tempVariantsList.map(v => ({
         id: v.id || 0,
-        variantName: v.variantName,
+        variantName: v.variantName || 'Variant',
         brand: v.brand || prodBrandInput.trim() || 'string',
         unit: v.unit || prodUnitType || 'string',
         unitValue: v.unitValue || prodUnitVal || 'string',
-        mrp: v.mrp || v.sellingPrice,
-        sellingPrice: v.sellingPrice,
-        stockQuantity: v.stockQuantity,
+        mrp: v.mrp || v.sellingPrice || 0,
+        sellingPrice: v.sellingPrice || 0,
+        stockQuantity: v.stockQuantity || 0,
         thresholdQuantity: v.thresholdQuantity || 0,
         imageUrl: v.imageUrl || 'string',
         expiryDate: v.expiryDate || '2026-07-26'
@@ -562,22 +501,21 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         Alert.alert("Server Rejected", errBody.message || "Failed to finalize catalog edits.");
       }
     } catch (err) {
-      Alert.alert("Network Issue", "Failed optimization synchronization loop.");
+      Alert.alert("Network Issue", "Failed synchronization loop.");
     } finally {
       setIsLoading(false);
     }
   };
 
   const deleteProductItem = useCallback(async (idToDelete: number) => {
-    const fastToken = authToken || await AsyncStorage.getItem('user_auth_token');
+    const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
     if (!fastToken) return;
 
     try {
       setServerGroups(prev => prev.map(group => ({
         ...group,
-        products: group.products.filter(p => p.shopProductId !== idToDelete)
+        products: Array.isArray(group.products) ? group.products.filter(p => p.shopProductId !== idToDelete) : []
       })));
-      setBackendCategoryFilteredProducts(prev => prev ? prev.filter(p => p.shopProductId !== idToDelete) : null);
       
       await fetch(`${BASE_URL}/v1/admin/catalog/deactivate/${idToDelete}`, {
         method: 'PUT',
@@ -587,7 +525,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         }
       });
     } catch (err) {
-      // Bypassed cleanly
+      // Handled cleanly
     }
   }, [authToken]);
 
@@ -603,8 +541,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       brand: vBrandInput.trim() || prodBrandInput.trim() || 'string',
       unit: vUnitType.trim() || prodUnitType || 'string',
       unitValue: vUnitVal.trim() || prodUnitVal || 'string',
-      mrp: parseFloat(vMrpInput) || parseFloat(prodMrpInput) || parseFloat(vPriceInput),
-      sellingPrice: parseFloat(vPriceInput),
+      mrp: parseFloat(vMrpInput) || parseFloat(prodMrpInput) || parseFloat(vPriceInput) || 0,
+      sellingPrice: parseFloat(vPriceInput) || 0,
       stockQuantity: parseInt(vStockQty) || 0,
       thresholdQuantity: parseInt(vThresholdQty) || 0,
       imageUrl: variantImageTarget || productImageTarget || 'string',
@@ -628,10 +566,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   }, []);
 
   const filteredGridProducts = useMemo(() => {
-    if (backendCategoryFilteredProducts !== null && Array.isArray(backendCategoryFilteredProducts)) {
-      return backendCategoryFilteredProducts;
-    }
-
     if (!Array.isArray(serverGroups) || serverGroups.length === 0) return [];
     
     const matchedGroup = serverGroups.find(
@@ -639,7 +573,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     ) || serverGroups[0];
     
     return matchedGroup && Array.isArray(matchedGroup.products) ? matchedGroup.products : [];
-  }, [backendCategoryFilteredProducts, serverGroups, selectedCategory]);
+  }, [serverGroups, selectedCategory]);
 
   const gridAvailableWidth = useMemo(() => {
     return showSidebar ? (windowWidth - 95) : windowWidth;
@@ -656,10 +590,10 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   ), [openProductForEditingAction, deleteProductItem, toggleProductVisibility, gridAvailableWidth]);
 
   const keyExtractor = useCallback((item: CatalogProductItem, index: number) => {
-    if (item && item.shopProductId) {
-      return item.shopProductId.toString();
+    if (item && item.shopProductId != null) {
+      return `prod_${item.shopProductId}`;
     }
-    return `fallback_index_node_${index}`;
+    return `item_fallback_${index}`;
   }, []);
 
   return (
@@ -696,9 +630,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         {showSidebar && (
           <View style={styles.leftNavigationSidebar}>
             <ScrollView showsVerticalScrollIndicator={false} removeClippedSubviews={Platform.OS === 'android'}>
-              {isLoading && (categoriesList?.length === 0 || !categoriesList) ? (
+              {isLoading && (!categoriesList || categoriesList.length === 0) ? (
                 <ActivityIndicator style={{ marginTop: 30 }} size="small" color="#D2691E" />
-              ) : (categoriesList?.length === 0 || !categoriesList) ? (
+              ) : (!categoriesList || categoriesList.length === 0) ? (
                 <View style={{ padding: 10, alignItems: 'center' }}>
                   <Text style={{ fontSize: 10, color: '#A89685', textAlign: 'center', fontWeight: '600', marginTop: 20 }}>No Categories</Text>
                 </View>
@@ -709,9 +643,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
                     <View key={index} style={[styles.sidebarNodeWrapper, isSelectedNode && styles.sidebarNodeActive]}>
                       <TouchableOpacity style={styles.sidebarNodeButton} onPress={() => handleCategoryClick(category)} activeOpacity={0.8}>
                         <View style={[styles.nodeIconIndicator, isSelectedNode && styles.nodeIconIndicatorActive]}>
-                          <Text style={[styles.indicatorChar, isSelectedNode && styles.indicatorCharActive]}>{category ? category.charAt(0) : 'C'}</Text>
+                          <Text style={[styles.indicatorChar, isSelectedNode && styles.indicatorCharActive]}>{category ? String(category).charAt(0).toUpperCase() : 'C'}</Text>
                         </View>
-                        <Text style={[styles.sidebarNodeLabelText, isSelectedNode && styles.sidebarNodeLabelActive]}>{category}</Text>
+                        <Text style={[styles.sidebarNodeLabelText, isSelectedNode && styles.sidebarNodeLabelActive]}>{String(category)}</Text>
                       </TouchableOpacity>
                     </View>
                   );
@@ -722,12 +656,12 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         )}
 
         <View style={styles.rightProductGridPanel}>
-          {isLoading && (filteredGridProducts?.length === 0 || !filteredGridProducts) ? (
+          {isLoading && (!filteredGridProducts || filteredGridProducts.length === 0) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
               <ActivityIndicator size="large" color="#D2691E" />
               <Text style={{ fontSize: 12, color: '#A89685', fontWeight: '700', marginTop: 10 }}>Syncing Catalog Metrics...</Text>
             </View>
-          ) : (filteredGridProducts?.length === 0 || !filteredGridProducts) ? (
+          ) : (!filteredGridProducts || filteredGridProducts.length === 0) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
               <Text style={{ fontSize: 13, color: '#5C4033', fontWeight: '700', textAlign: 'center' }}>
                 {categoriesList?.length === 0 ? "Catalog is Empty" : "No products inside this catalog node"}
@@ -849,7 +783,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
                   {tempVariantsList.map((variant, vIdx) => (
                     <View key={vIdx} style={styles.miniVariantStripRow}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', flex: 0.9 }}>
-                        {variant.imageUrl && variant.imageUrl !== "string" ? (
+                        {variant.imageUrl && typeof variant.imageUrl === 'string' && variant.imageUrl.startsWith('http') ? (
                           <Image source={{ uri: variant.imageUrl }} style={styles.miniVariantImageThumb} />
                         ) : null}
                         <Text style={styles.miniVariantText} numberOfLines={1}>
