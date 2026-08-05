@@ -319,7 +319,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     
     if (!fastToken) return;
 
-    setServerGroups(prevGroups => prevGroups.map(group => ({
+    setServerGroups(prevGroups => (Array.isArray(prevGroups) ? prevGroups : []).map(group => ({
       ...group,
       products: Array.isArray(group.products) 
         ? group.products.map(prod => prod.shopProductId === shopProductId ? { ...prod, active: nextActiveState } : prod)
@@ -456,8 +456,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       unit: prodUnitType || 'string',
       unitValue: prodUnitVal || 'string',
       expiryDate: prodExpiryDate || '2026-07-26',
-      hasVariants: prodHasVariants || tempVariantsList.length > 0,
-      variants: (prodHasVariants || tempVariantsList.length > 0) ? tempVariantsList.map(v => ({
+      hasVariants: prodHasVariants || (Array.isArray(tempVariantsList) && tempVariantsList.length > 0),
+      variants: (prodHasVariants || (Array.isArray(tempVariantsList) && tempVariantsList.length > 0)) ? (Array.isArray(tempVariantsList) ? tempVariantsList : []).map(v => ({
         id: v.id || 0,
         variantName: v.variantName || 'Variant',
         brand: v.brand || prodBrandInput.trim() || 'string',
@@ -512,7 +512,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     if (!fastToken) return;
 
     try {
-      setServerGroups(prev => prev.map(group => ({
+      setServerGroups(prev => (Array.isArray(prev) ? prev : []).map(group => ({
         ...group,
         products: Array.isArray(group.products) ? group.products.filter(p => p.shopProductId !== idToDelete) : []
       })));
@@ -535,7 +535,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       return;
     }
     
-    setTempVariantsList(prev => [...prev, {
+    setTempVariantsList(prev => [...(Array.isArray(prev) ? prev : []), {
       id: 0, 
       variantName: vNameInput.trim(),
       brand: vBrandInput.trim() || prodBrandInput.trim() || 'string',
@@ -562,15 +562,16 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   }, [vNameInput, vBrandInput, prodBrandInput, vUnitType, prodUnitType, vUnitVal, prodUnitVal, vMrpInput, prodMrpInput, vPriceInput, vStockQty, vThresholdQty, variantImageTarget, productImageTarget, vExpiryDate, prodExpiryDate]);
 
   const deleteVariantFromTempList = useCallback((indexToRemove: number) => {
-    setTempVariantsList(prev => prev.filter((_, idx) => idx !== indexToRemove));
+    setTempVariantsList(prev => (Array.isArray(prev) ? prev : []).filter((_, idx) => idx !== indexToRemove));
   }, []);
 
   const filteredGridProducts = useMemo(() => {
-    if (!Array.isArray(serverGroups) || serverGroups.length === 0) return [];
+    const groups = Array.isArray(serverGroups) ? serverGroups : [];
+    if (groups.length === 0) return [];
     
-    const matchedGroup = serverGroups.find(
+    const matchedGroup = groups.find(
       group => group && group.categoryName === selectedCategory
-    ) || serverGroups[0];
+    ) || groups[0];
     
     return matchedGroup && Array.isArray(matchedGroup.products) ? matchedGroup.products : [];
   }, [serverGroups, selectedCategory]);
@@ -595,6 +596,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     }
     return `item_fallback_${index}`;
   }, []);
+
+  const safeCategories = Array.isArray(categoriesList) ? categoriesList : [];
 
   return (
     <SafeAreaView style={styles.viewMainWrapper} edges={['top', 'bottom']}>
@@ -630,22 +633,23 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         {showSidebar && (
           <View style={styles.leftNavigationSidebar}>
             <ScrollView showsVerticalScrollIndicator={false} removeClippedSubviews={Platform.OS === 'android'}>
-              {isLoading && (!categoriesList || categoriesList.length === 0) ? (
+              {isLoading && safeCategories.length === 0 ? (
                 <ActivityIndicator style={{ marginTop: 30 }} size="small" color="#D2691E" />
-              ) : (!categoriesList || categoriesList.length === 0) ? (
+              ) : safeCategories.length === 0 ? (
                 <View style={{ padding: 10, alignItems: 'center' }}>
                   <Text style={{ fontSize: 10, color: '#A89685', textAlign: 'center', fontWeight: '600', marginTop: 20 }}>No Categories</Text>
                 </View>
               ) : (
-                categoriesList.map((category, index) => {
-                  const isSelectedNode = (selectedCategory || categoriesList[0]) === category;
+                safeCategories.map((category, index) => {
+                  const safeCatName = String(category || 'General');
+                  const isSelectedNode = (selectedCategory || safeCategories[0]) === safeCatName;
                   return (
                     <View key={index} style={[styles.sidebarNodeWrapper, isSelectedNode && styles.sidebarNodeActive]}>
-                      <TouchableOpacity style={styles.sidebarNodeButton} onPress={() => handleCategoryClick(category)} activeOpacity={0.8}>
+                      <TouchableOpacity style={styles.sidebarNodeButton} onPress={() => handleCategoryClick(safeCatName)} activeOpacity={0.8}>
                         <View style={[styles.nodeIconIndicator, isSelectedNode && styles.nodeIconIndicatorActive]}>
-                          <Text style={[styles.indicatorChar, isSelectedNode && styles.indicatorCharActive]}>{category ? String(category).charAt(0).toUpperCase() : 'C'}</Text>
+                          <Text style={[styles.indicatorChar, isSelectedNode && styles.indicatorCharActive]}>{safeCatName.charAt(0).toUpperCase()}</Text>
                         </View>
-                        <Text style={[styles.sidebarNodeLabelText, isSelectedNode && styles.sidebarNodeLabelActive]}>{String(category)}</Text>
+                        <Text style={[styles.sidebarNodeLabelText, isSelectedNode && styles.sidebarNodeLabelActive]}>{safeCatName}</Text>
                       </TouchableOpacity>
                     </View>
                   );
@@ -664,7 +668,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           ) : (!filteredGridProducts || filteredGridProducts.length === 0) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
               <Text style={{ fontSize: 13, color: '#5C4033', fontWeight: '700', textAlign: 'center' }}>
-                {categoriesList?.length === 0 ? "Catalog is Empty" : "No products inside this catalog node"}
+                {safeCategories.length === 0 ? "Catalog is Empty" : "No products inside this catalog node"}
               </Text>
             </View>
           ) : (
@@ -780,10 +784,10 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
                 <View style={styles.variantContainerBox}>
                   <Text style={styles.variantSectionHeaderTitle}>Add Variant Details</Text>
                   
-                  {tempVariantsList.map((variant, vIdx) => (
+                  {(Array.isArray(tempVariantsList) ? tempVariantsList : []).map((variant, vIdx) => (
                     <View key={vIdx} style={styles.miniVariantStripRow}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', flex: 0.9 }}>
-                        {variant.imageUrl && typeof variant.imageUrl === 'string' && variant.imageUrl.startsWith('http') ? (
+                        {variant?.imageUrl && typeof variant.imageUrl === 'string' && variant.imageUrl.startsWith('http') ? (
                           <Image source={{ uri: variant.imageUrl }} style={styles.miniVariantImageThumb} />
                         ) : null}
                         <Text style={styles.miniVariantText} numberOfLines={1}>
