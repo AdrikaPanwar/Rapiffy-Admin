@@ -10,7 +10,7 @@ import { OrderView } from '../views/OrderView';
 import { ProfileView } from '../views/ProfileView';
 
 const BASE_URL = 'https://rapiffy-backend-1.onrender.com';
-const LOGIN_API_URL = BASE_URL + '/v1/auth/login';
+const LOGIN_API_URL = `${BASE_URL}/v1/auth/login`;
 
 export const AdminLoginController: React.FC = () => {
   const [currentScreen, setCurrentScreen] = useState<'login' | 'forgot_password' | 'home' | 'category' | 'coverage' | 'order' | 'profile'>('login');
@@ -44,24 +44,15 @@ export const AdminLoginController: React.FC = () => {
         const storedIdentity = await AsyncStorage.getItem('user_identity');
 
         if (storedToken) {
-          setAuthToken(storedToken);
+          const cleanToken = storedToken.trim();
+          setAuthToken(cleanToken);
           
           if (storedIdentity && storedIdentity.trim() !== '') {
             setLockedIdentity(storedIdentity);
           } else {
-            // Fallback decoding if user_identity was missing in older sessions
-            try {
-              const payload = JSON.parse(atob(storedToken.split('.')[1]));
-              const decodedIdentity = payload.sub || payload.email || payload.phoneNumber || payload.username;
-              if (decodedIdentity) {
-                setLockedIdentity(decodedIdentity);
-                await AsyncStorage.setItem('user_identity', decodedIdentity);
-              }
-            } catch (e) {
-              setLockedIdentity(identityInput || '');
-            }
+            setLockedIdentity(identityInput || 'Admin');
           }
-          setCurrentScreen('home'); // Bypass login
+          setCurrentScreen('home');
         }
       } catch (error) {
         console.error('Error reading auth token:', error);
@@ -142,30 +133,27 @@ export const AdminLoginController: React.FC = () => {
 
       clearTimeout(timeoutId);
 
-      if (response.ok) {
-        const data = await response.json();
-        let tokenToSave = '';
+      const data = await response.json();
 
-        if (data && data.token) {
-          tokenToSave = data.token;
-        } else if (data && typeof data === 'string') {
-          tokenToSave = data;
-        }
+      if (response.ok && data && data.token) {
+        const freshToken = data.token.trim();
 
-        if (tokenToSave) {
-          setAuthToken(tokenToSave);
-          await AsyncStorage.setItem('user_auth_token', tokenToSave);
-          await AsyncStorage.setItem('user_identity', cleanInput);
-        }
+        // 1. Storage wipe to avoid stale token retention
+        await AsyncStorage.removeItem('user_auth_token');
+        await AsyncStorage.setItem('user_auth_token', freshToken);
+        await AsyncStorage.setItem('user_identity', cleanInput);
 
+        // 2. Immediate state sync
+        setAuthToken(freshToken);
         setLockedIdentity(cleanInput); 
-        showLoginNotification('Hurray! Logged in');
+        
+        showLoginNotification('Login Successful!');
 
         setTimeout(() => {
           triggerFlashTransition();
-        }, 1000);
+        }, 800);
       } else {
-        showLoginNotification('Wrong password or username/email ID.');
+        showLoginNotification(data.message || 'Wrong password or username/email ID.');
       }
     } catch (error: any) {
       clearTimeout(timeoutId);

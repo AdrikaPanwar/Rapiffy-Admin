@@ -62,8 +62,16 @@ export interface CatalogProductItem {
   active?: boolean;
 }
 
+export interface SubCategoryItem {
+  subCategoryId: number;
+  subCategoryName: string;
+  products: CatalogProductItem[];
+}
+
 export interface ServerCategoryGroup {
+  categoryId?: number;
   categoryName: string;
+  subCategories?: SubCategoryItem[];
   products: CatalogProductItem[];
 }
 
@@ -126,7 +134,7 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
             onPress={() => onDelete(item.shopProductId)}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Text style={styles.trashText}>✕</Text>
+            <Text style={styles.trashText}>X</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -156,6 +164,7 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
 
 export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToken }) => {
   const [serverGroups, setServerGroups] = useState<ServerCategoryGroup[]>([]);
+  const [backendCategoryFilteredProducts, setBackendCategoryFilteredProducts] = useState<CatalogProductItem[] | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
   const [categoriesList, setCategoriesList] = useState<string[]>([]);
@@ -184,7 +193,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const [prodHasVariants, setProdHasVariants] = useState<boolean>(false);
   const [productImageTarget, setProductImageTarget] = useState<string | null>(null);
 
-  // FULL VARIANT INPUT STATES (MATCHING SCHEMA)
+  // FULL VARIANT INPUT STATES
   const [vNameInput, setVNameInput] = useState<string>('');
   const [vBrandInput, setVBrandInput] = useState<string>('');
   const [vExpiryDate, setVExpiryDate] = useState<string>('2026-07-26');
@@ -200,22 +209,30 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   useEffect(() => {
     let isMounted = true;
-    const dispatchSingleFetchPipeline = async () => {
+    const fetchFreshJwtAndSync = async () => {
       if (!isMounted) return;
-      const fastToken = authToken || await AsyncStorage.getItem('user_auth_token');
-      if (fastToken) {
-        syncInventoryFromServer(fastToken);
+      
+      let tokenToUse = authToken;
+      if (!tokenToUse) {
+        tokenToUse = await AsyncStorage.getItem('user_auth_token') || undefined;
+      }
+
+      if (tokenToUse) {
+        syncInventoryFromServer(tokenToUse.trim());
       } else {
-        Alert.alert("Authentication Failure", "Please navigate back and log in first.");
+        Alert.alert("JWT Token Missing", "Please log in again to generate a valid JWT token.");
       }
     };
-    dispatchSingleFetchPipeline();
+
+    fetchFreshJwtAndSync();
     return () => { isMounted = false; };
-  }, []);
+  }, [authToken]);
 
   const syncInventoryFromServer = async (resolvedToken: string) => {
     setIsLoading(true);
     try {
+      console.log("SENDING TOKEN HEADER:", `Bearer ${resolvedToken}`);
+
       const response = await fetch(`${BASE_URL}/v1/admin/catalog/my-products`, {
         method: 'GET',
         headers: {
@@ -224,37 +241,120 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         }
       });
 
+      console.log("RESPONSE STATUS:", response.status);
+
       const itemsData = await response.json();
+      console.log("RAW BACKEND JSON RESPONSE:", JSON.stringify(itemsData, null, 2));
+
       if (response.status === 200 && Array.isArray(itemsData)) {
-        setServerGroups(itemsData);
+        const normalizedGroups: ServerCategoryGroup[] = itemsData.map((group: any) => {
+          let extractedProducts: CatalogProductItem[] = [];
+
+          if (Array.isArray(group.subCategories)) {
+            group.subCategories.forEach((sub: any) => {
+              if (Array.isArray(sub.products)) {
+                extractedProducts = [...extractedProducts, ...sub.products];
+              }
+            });
+          } else if (Array.isArray(group.products)) {
+            extractedProducts = group.products;
+          }
+
+          return {
+            categoryId: group.categoryId,
+            categoryName: group.categoryName,
+            products: extractedProducts
+          };
+        });
+
+        setServerGroups(normalizedGroups);
         
-        const extractedCategories = itemsData
-          .map((group: ServerCategoryGroup) => group.categoryName)
+        const extractedCategories = normalizedGroups
+          .map((group) => group.categoryName)
           .filter(Boolean);
         
-        setCategoriesList(extractedCategories);
+        setCategoriesList(extractedCategories || []);
 
         const dynamicMap: Record<string, number> = {};
-        itemsData.forEach((group: ServerCategoryGroup) => {
-          if (group.products && group.products.length > 0) {
-            const firstValidProduct = group.products.find(p => p && p.categoryId);
-            if (firstValidProduct && firstValidProduct.categoryId) {
-              dynamicMap[group.categoryName] = firstValidProduct.categoryId;
-            }
+        normalizedGroups.forEach((group) => {
+          if (group.categoryId) {
+            dynamicMap[group.categoryName] = group.categoryId;
           }
         });
         setCategoryMetadataMap(dynamicMap);
         
-        if (extractedCategories.length > 0 && !selectedCategory) {
-          setSelectedCategory(extractedCategories[0]);
+        if (extractedCategories.length > 0) {
+          const firstCatName = extractedCategories[0];
+          setSelectedCategory(firstCatName);
+          
+          const firstCatId = dynamicMap[firstCatName];
+          if (firstCatId) {
+            fetchCategoryByIdWithFallback(firstCatId, resolvedToken);
+          }
         }
-      } else if (response.status === 404) {
-        Alert.alert("Catalog Error", "Shop inventory metadata layout missing.");
+      } else if (response.status === 401 || response.status === 403) {
+        Alert.alert("JWT Token Invalid", "The session JWT token was rejected by backend server.");
+      } else {
+        setCategoriesList([]);
       }
     } catch (err) {
-      console.log("Network parsing structural catch.");
+      setCategoriesList([]);
+      console.log("Network parsing structural catch:", err);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  /*
+    NOTE / COMMENT: 
+    The endpoint GET /v1/admin/catalog/my-products/{categoryId} is currently returning a 500 Server Error
+    (NoResourceFoundException) on backend side.
+    This helper function attempts to fetch category-filtered data from that API if available.
+    If it fails, it gracefully falls back to displaying the original loaded data array from serverGroups.
+  */
+  const fetchCategoryByIdWithFallback = async (catId: number, overrideToken?: string) => {
+    try {
+      const token = overrideToken || authToken || await AsyncStorage.getItem('user_auth_token');
+      if (!token) return;
+
+      const response = await fetch(`${BASE_URL}/v1/admin/catalog/my-products/${catId}`, {
+        method: 'GET',
+        headers: {
+          'accept': '*/*',
+          'Authorization': `Bearer ${token.trim()}`
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        let extracted: CatalogProductItem[] = [];
+
+        if (Array.isArray(data.products)) {
+          extracted = data.products;
+        } else if (Array.isArray(data.subCategories)) {
+          data.subCategories.forEach((sub: any) => {
+            if (Array.isArray(sub.products)) extracted = [...extracted, ...sub.products];
+          });
+        } else if (Array.isArray(data)) {
+          extracted = data;
+        }
+
+        setBackendCategoryFilteredProducts(extracted);
+      } else {
+        setBackendCategoryFilteredProducts(null);
+      }
+    } catch (error) {
+      setBackendCategoryFilteredProducts(null);
+    }
+  };
+
+  const handleCategoryClick = (categoryName: string) => {
+    setSelectedCategory(categoryName);
+    const catId = categoryMetadataMap[categoryName];
+    if (catId) {
+      fetchCategoryByIdWithFallback(catId);
+    } else {
+      setBackendCategoryFilteredProducts(null);
     }
   };
 
@@ -263,7 +363,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     const fastToken = authToken || await AsyncStorage.getItem('user_auth_token');
     
     if (!fastToken) {
-      Alert.alert("Unauthorized", "Session token missing.");
+      Alert.alert("Unauthorized", "Session JWT token missing.");
       return;
     }
 
@@ -276,35 +376,23 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       )
     })));
 
+    setBackendCategoryFilteredProducts(prev => prev ? prev.map(p => p.shopProductId === shopProductId ? { ...p, active: nextActiveState } : p) : null);
+
     try {
       const response = await fetch(`${BASE_URL}/v1/admin/catalog/visibility/${shopProductId}?active=${nextActiveState}`, {
         method: 'PATCH',
         headers: {
           'accept': '*/*',
-          'Authorization': `Bearer ${fastToken}`
+          'Authorization': `Bearer ${fastToken.trim()}`
         }
       });
 
       if (!response.ok) {
-        setServerGroups(prevGroups => prevGroups.map(group => ({
-          ...group,
-          products: group.products.map(prod => 
-            prod.shopProductId === shopProductId 
-              ? { ...prod, active: currentActiveState }
-              : prod
-          )
-        })));
+        if (fastToken) syncInventoryFromServer(fastToken.trim());
         Alert.alert("Visibility Update Failed", "Server rejected the request.");
       }
     } catch (error) {
-      setServerGroups(prevGroups => prevGroups.map(group => ({
-        ...group,
-        products: group.products.map(prod => 
-          prod.shopProductId === shopProductId 
-            ? { ...prod, active: currentActiveState }
-            : prod
-        )
-      })));
+      if (fastToken) syncInventoryFromServer(fastToken.trim());
       Alert.alert("Network Error", "Could not reach server.");
     }
   }, [authToken]);
@@ -409,7 +497,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
     const fastToken = authToken || await AsyncStorage.getItem('user_auth_token');
     if (!fastToken) {
-      Alert.alert("Unauthorized", "Session scope validation missing.");
+      Alert.alert("Unauthorized", "Session JWT token missing.");
       return;
     }
 
@@ -459,14 +547,14 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         method: reqMethod,
         headers: {
           'accept': '*/*',
-          'Authorization': `Bearer ${fastToken}`,
+          'Authorization': `Bearer ${fastToken.trim()}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(itemPayload)
       });
 
       if (response.status === 200 || response.status === 201) {
-        syncInventoryFromServer(fastToken);
+        syncInventoryFromServer(fastToken.trim());
         closeFormAndWipeDataBuffers();
         Alert.alert("Success", isEditingMode ? "Product updated successfully!" : "Product added successfully!");
       } else {
@@ -489,12 +577,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         ...group,
         products: group.products.filter(p => p.shopProductId !== idToDelete)
       })));
+      setBackendCategoryFilteredProducts(prev => prev ? prev.filter(p => p.shopProductId !== idToDelete) : null);
       
       await fetch(`${BASE_URL}/v1/admin/catalog/deactivate/${idToDelete}`, {
         method: 'PUT',
         headers: {
           'accept': '*/*',
-          'Authorization': `Bearer ${fastToken}`
+          'Authorization': `Bearer ${fastToken.trim()}`
         }
       });
     } catch (err) {
@@ -522,7 +611,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       expiryDate: vExpiryDate || prodExpiryDate || '2026-07-26'
     }]);
 
-    // Reset Variant Specific Inputs
     setVNameInput('');
     setVBrandInput('');
     setVExpiryDate('2026-07-26');
@@ -540,9 +628,18 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   }, []);
 
   const filteredGridProducts = useMemo(() => {
-    const matchedGroup = serverGroups.find(group => group.categoryName === selectedCategory);
-    return matchedGroup ? matchedGroup.products : [];
-  }, [serverGroups, selectedCategory]);
+    if (backendCategoryFilteredProducts !== null && Array.isArray(backendCategoryFilteredProducts)) {
+      return backendCategoryFilteredProducts;
+    }
+
+    if (!Array.isArray(serverGroups) || serverGroups.length === 0) return [];
+    
+    const matchedGroup = serverGroups.find(
+      group => group && group.categoryName === selectedCategory
+    ) || serverGroups[0];
+    
+    return matchedGroup && Array.isArray(matchedGroup.products) ? matchedGroup.products : [];
+  }, [backendCategoryFilteredProducts, serverGroups, selectedCategory]);
 
   const gridAvailableWidth = useMemo(() => {
     return showSidebar ? (windowWidth - 95) : windowWidth;
@@ -599,18 +696,18 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         {showSidebar && (
           <View style={styles.leftNavigationSidebar}>
             <ScrollView showsVerticalScrollIndicator={false} removeClippedSubviews={Platform.OS === 'android'}>
-              {isLoading && categoriesList.length === 0 ? (
+              {isLoading && (categoriesList?.length === 0 || !categoriesList) ? (
                 <ActivityIndicator style={{ marginTop: 30 }} size="small" color="#D2691E" />
-              ) : categoriesList.length === 0 ? (
+              ) : (categoriesList?.length === 0 || !categoriesList) ? (
                 <View style={{ padding: 10, alignItems: 'center' }}>
                   <Text style={{ fontSize: 10, color: '#A89685', textAlign: 'center', fontWeight: '600', marginTop: 20 }}>No Categories</Text>
                 </View>
               ) : (
                 categoriesList.map((category, index) => {
-                  const isSelectedNode = selectedCategory === category;
+                  const isSelectedNode = (selectedCategory || categoriesList[0]) === category;
                   return (
                     <View key={index} style={[styles.sidebarNodeWrapper, isSelectedNode && styles.sidebarNodeActive]}>
-                      <TouchableOpacity style={styles.sidebarNodeButton} onPress={() => setSelectedCategory(category)} activeOpacity={0.8}>
+                      <TouchableOpacity style={styles.sidebarNodeButton} onPress={() => handleCategoryClick(category)} activeOpacity={0.8}>
                         <View style={[styles.nodeIconIndicator, isSelectedNode && styles.nodeIconIndicatorActive]}>
                           <Text style={[styles.indicatorChar, isSelectedNode && styles.indicatorCharActive]}>{category ? category.charAt(0) : 'C'}</Text>
                         </View>
@@ -625,15 +722,15 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         )}
 
         <View style={styles.rightProductGridPanel}>
-          {isLoading && filteredGridProducts.length === 0 ? (
+          {isLoading && (filteredGridProducts?.length === 0 || !filteredGridProducts) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
               <ActivityIndicator size="large" color="#D2691E" />
               <Text style={{ fontSize: 12, color: '#A89685', fontWeight: '700', marginTop: 10 }}>Syncing Catalog Metrics...</Text>
             </View>
-          ) : filteredGridProducts.length === 0 ? (
+          ) : (filteredGridProducts?.length === 0 || !filteredGridProducts) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
               <Text style={{ fontSize: 13, color: '#5C4033', fontWeight: '700', textAlign: 'center' }}>
-                {categoriesList.length === 0 ? "Catalog is Empty" : "No products inside this catalog node"}
+                {categoriesList?.length === 0 ? "Catalog is Empty" : "No products inside this catalog node"}
               </Text>
             </View>
           ) : (
@@ -660,7 +757,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           <View style={styles.productDialogBoxFrame}>
             <View style={styles.drawerHeaderFrame}>
               <Text style={styles.drawerTitleText}>{isEditingMode ? 'Edit / Update Product Detail' : 'Add New Product'}</Text>
-              <TouchableOpacity onPress={closeFormAndWipeDataBuffers}><Text style={styles.closeDrawerIconText}>✕</Text></TouchableOpacity>
+              <TouchableOpacity onPress={closeFormAndWipeDataBuffers}><Text style={styles.closeDrawerIconText}>X</Text></TouchableOpacity>
             </View>
 
             <ScrollView style={{ marginTop: 10 }} showsVerticalScrollIndicator={false}>
@@ -749,7 +846,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
                 <View style={styles.variantContainerBox}>
                   <Text style={styles.variantSectionHeaderTitle}>Add Variant Details</Text>
                   
-                  {/* LIST OF ADDED VARIANTS */}
                   {tempVariantsList.map((variant, vIdx) => (
                     <View key={vIdx} style={styles.miniVariantStripRow}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', flex: 0.9 }}>
@@ -761,12 +857,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
                         </Text>
                       </View>
                       <TouchableOpacity onPress={() => deleteVariantFromTempList(vIdx)}>
-                        <Text style={styles.miniVariantDeleteCross}>✕</Text>
+                        <Text style={styles.miniVariantDeleteCross}>X</Text>
                       </TouchableOpacity>
                     </View>
                   ))}
 
-                  {/* VARIANT IMAGE PICKER SECTION */}
                   <Text style={styles.inputLabelField}>Variant Image</Text>
                   <TouchableOpacity style={styles.variantImagePreviewContainer} onPress={pickVariantImageFromDeviceGallery}>
                     {variantImageTarget ? (
