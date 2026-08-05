@@ -62,16 +62,9 @@ export interface CatalogProductItem {
   active?: boolean;
 }
 
-export interface SubCategoryItem {
-  subCategoryId: number;
-  subCategoryName: string;
-  products: CatalogProductItem[];
-}
-
 export interface ServerCategoryGroup {
   categoryId?: number;
   categoryName: string;
-  subCategories?: SubCategoryItem[];
   products: CatalogProductItem[];
 }
 
@@ -169,10 +162,8 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
 export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToken }) => {
   const [serverGroups, setServerGroups] = useState<ServerCategoryGroup[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-
   const [categoriesList, setCategoriesList] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
-
   const [categoryMetadataMap, setCategoryMetadataMap] = useState<Record<string, number>>({});
 
   const [showSidebar, setShowSidebar] = useState<boolean>(false);
@@ -181,7 +172,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const [isEditingMode, setIsEditingMode] = useState<boolean>(false);
   const [targetEditProductId, setTargetEditProductId] = useState<number | null>(null);
 
-  // MAIN PRODUCT FORM STATES
+  // FORM STATES
   const [prodNameInput, setProdNameInput] = useState<string>('');
   const [prodBrandInput, setProdBrandInput] = useState<string>('');
   const [prodShortDesc, setProdShortDesc] = useState<string>('');
@@ -196,7 +187,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const [prodHasVariants, setProdHasVariants] = useState<boolean>(false);
   const [productImageTarget, setProductImageTarget] = useState<string | null>(null);
 
-  // FULL VARIANT INPUT STATES
   const [vNameInput, setVNameInput] = useState<string>('');
   const [vBrandInput, setVBrandInput] = useState<string>('');
   const [vExpiryDate, setVExpiryDate] = useState<string>('2026-07-26');
@@ -207,7 +197,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const [vStockQty, setVStockQty] = useState<string>('0');
   const [vThresholdQty, setVThresholdQty] = useState<string>('0');
   const [variantImageTarget, setVariantImageTarget] = useState<string | null>(null);
-  
   const [tempVariantsList, setTempVariantsList] = useState<ProductVariantItem[]>([]);
 
   useEffect(() => {
@@ -234,7 +223,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   }, [authToken]);
 
   const syncInventoryFromServer = async (resolvedToken: string) => {
-    setIsLoading(true);
     try {
       const response = await fetch(`${BASE_URL}/v1/admin/catalog/my-products`, {
         method: 'GET',
@@ -253,51 +241,50 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       let itemsData: any = [];
       try {
         itemsData = JSON.parse(responseText);
-      } catch (parseError) {
-        setIsLoading(false);
-        return;
+      } catch (e) {
+        itemsData = [];
       }
 
-      if (Array.isArray(itemsData)) {
-        const normalizedGroups: ServerCategoryGroup[] = itemsData.map((group: any) => {
-          let extractedProducts: CatalogProductItem[] = [];
-
-          if (group && Array.isArray(group.subCategories)) {
+      const safeItems = Array.isArray(itemsData) ? itemsData : [];
+      const normalizedGroups: ServerCategoryGroup[] = safeItems.map((group: any) => {
+        let extractedProducts: CatalogProductItem[] = [];
+        if (group) {
+          if (Array.isArray(group.subCategories)) {
             group.subCategories.forEach((sub: any) => {
               if (sub && Array.isArray(sub.products)) {
                 extractedProducts = [...extractedProducts, ...sub.products];
               }
             });
-          } else if (group && Array.isArray(group.products)) {
+          } else if (Array.isArray(group.products)) {
             extractedProducts = group.products;
           }
-
-          return {
-            categoryId: group?.categoryId,
-            categoryName: group?.categoryName ? String(group.categoryName) : 'General',
-            products: extractedProducts
-          };
-        });
-
-        setServerGroups(normalizedGroups);
-        
-        const extractedCategories = normalizedGroups
-          .map((group) => group.categoryName)
-          .filter(Boolean);
-        
-        setCategoriesList(extractedCategories || []);
-
-        const dynamicMap: Record<string, number> = {};
-        normalizedGroups.forEach((group) => {
-          if (group.categoryName && group.categoryId) {
-            dynamicMap[group.categoryName] = group.categoryId;
-          }
-        });
-        setCategoryMetadataMap(dynamicMap);
-        
-        if (Array.isArray(extractedCategories) && extractedCategories.length > 0) {
-          setSelectedCategory(String(extractedCategories[0]));
         }
+
+        return {
+          categoryId: group?.categoryId,
+          categoryName: group?.categoryName ? String(group.categoryName) : 'General',
+          products: extractedProducts
+        };
+      });
+
+      setServerGroups(normalizedGroups);
+      
+      const extractedCategories = normalizedGroups
+        .map((group) => group.categoryName)
+        .filter(Boolean);
+      
+      setCategoriesList(extractedCategories);
+
+      const dynamicMap: Record<string, number> = {};
+      normalizedGroups.forEach((group) => {
+        if (group.categoryName && group.categoryId) {
+          dynamicMap[group.categoryName] = group.categoryId;
+        }
+      });
+      setCategoryMetadataMap(dynamicMap);
+      
+      if (extractedCategories.length > 0) {
+        setSelectedCategory(String(extractedCategories[0]));
       }
     } catch (err) {
       console.log("Sync error:", err);
@@ -313,7 +300,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const toggleProductVisibility = useCallback(async (shopProductId: number, currentActiveState: boolean) => {
     const nextActiveState = !currentActiveState;
     const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
-    
     if (!fastToken) return;
 
     setServerGroups(prevGroups => (Array.isArray(prevGroups) ? prevGroups : []).map(group => ({
@@ -338,10 +324,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   const pickImageFromDeviceGallery = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permissionResult.granted) {
-      alert("Permission to access gallery is required!");
-      return;
-    }
+    if (!permissionResult.granted) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsEditing: true,
@@ -355,10 +338,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   const pickVariantImageFromDeviceGallery = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permissionResult.granted) {
-      alert("Permission to access gallery is required!");
-      return;
-    }
+    if (!permissionResult.granted) return;
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsEditing: true,
@@ -387,7 +367,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     setProdExpiryDate(item.expiryDate || '2026-07-26');
     setProdHasVariants(!!item.hasVariants || (Array.isArray(item.variants) && item.variants.length > 0));
     setProductImageTarget(item.imageUrl === "string" ? null : item.imageUrl);
-    
     setTempVariantsList(Array.isArray(item.variants) ? item.variants : []);
     setVariantImageTarget(null);
     
@@ -411,7 +390,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     setProdHasVariants(false);
     setProductImageTarget(null);
     setVariantImageTarget(null);
-    
     setVNameInput('');
     setVBrandInput('');
     setVExpiryDate('2026-07-26');
@@ -421,7 +399,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     setVMrpInput('');
     setVStockQty('0');
     setVThresholdQty('0');
-
     setTempVariantsList([]);
     setIsEditingMode(false);
     setTargetEditProductId(null);
@@ -438,6 +415,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     if (!fastToken) return;
 
     const resolvedCategoryId = categoryMetadataMap[selectedCategory] || 1;
+    const safeVariants = Array.isArray(tempVariantsList) ? tempVariantsList : [];
 
     const itemPayload = {
       categoryId: resolvedCategoryId,
@@ -453,8 +431,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       unit: prodUnitType || 'string',
       unitValue: prodUnitVal || 'string',
       expiryDate: prodExpiryDate || '2026-07-26',
-      hasVariants: prodHasVariants || (Array.isArray(tempVariantsList) && tempVariantsList.length > 0),
-      variants: (prodHasVariants || (Array.isArray(tempVariantsList) && tempVariantsList.length > 0)) ? (Array.isArray(tempVariantsList) ? tempVariantsList : []).map(v => ({
+      hasVariants: prodHasVariants || safeVariants.length > 0,
+      variants: (prodHasVariants || safeVariants.length > 0) ? safeVariants.map(v => ({
         id: v.id || 0,
         variantName: v.variantName || 'Variant',
         brand: v.brand || prodBrandInput.trim() || 'string',
@@ -508,12 +486,12 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
     if (!fastToken) return;
 
+    setServerGroups(prev => (Array.isArray(prev) ? prev : []).map(group => ({
+      ...group,
+      products: Array.isArray(group.products) ? group.products.filter(p => p.shopProductId !== idToDelete) : []
+    })));
+
     try {
-      setServerGroups(prev => (Array.isArray(prev) ? prev : []).map(group => ({
-        ...group,
-        products: Array.isArray(group.products) ? group.products.filter(p => p.shopProductId !== idToDelete) : []
-      })));
-      
       await fetch(`${BASE_URL}/v1/admin/catalog/deactivate/${idToDelete}`, {
         method: 'PUT',
         headers: {
@@ -521,17 +499,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           'Authorization': `Bearer ${fastToken.trim()}`
         }
       });
-    } catch (err) {
-      // Handled cleanly
-    }
+    } catch (err) {}
   }, [authToken]);
 
   const addVariantToTempList = useCallback(() => {
-    if (!vNameInput.trim() || !vPriceInput.trim()) {
-      Alert.alert("Variant Field Missing", "Please enter variant name and selling price.");
-      return;
-    }
-    
+    if (!vNameInput.trim() || !vPriceInput.trim()) return;
     setTempVariantsList(prev => [...(Array.isArray(prev) ? prev : []), {
       id: 0, 
       variantName: vNameInput.trim(),
