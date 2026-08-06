@@ -17,7 +17,6 @@ import {
   ActivityIndicator
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Svg, { Path } from 'react-native-svg';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BottomNavBar } from '../components/BottomNavBar';
@@ -107,19 +106,7 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
           onPress={() => onToggleVisibility(item.shopProductId, isVisible)}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          {isVisible ? (
-            <Svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
-              <Path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
-              <Path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-            </Svg>
-          ) : (
-            <Svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
-              <Path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
-              <Path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
-              <Path d="M6.61 6.61A13.52 13.52 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
-              <Path d="M2 2l20 20" />
-            </Svg>
-          )}
+          <Text style={styles.actionBadgeText}>{isVisible ? 'O' : 'X'}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity 
@@ -127,9 +114,7 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
           onPress={() => onEdit(item)}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-            <Path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4Z"/>
-          </Svg>
+          <Text style={styles.actionBadgeText}>E</Text>
         </TouchableOpacity>
 
         {item.unlisted !== false && (
@@ -138,7 +123,7 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
             onPress={() => onDelete(item.shopProductId)}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Text style={styles.trashText}>X</Text>
+            <Text style={styles.trashText}>Del</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -367,7 +352,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     
     if (!fastToken) return;
 
-    // 1. Instantly update local UI state silently without triggering screen blinking / loading spinners
     setServerGroups(prevGroups => (Array.isArray(prevGroups) ? prevGroups : []).map(group => ({
       ...group,
       products: Array.isArray(group.products) 
@@ -379,7 +363,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       prev !== null ? prev.map(p => p.shopProductId === shopProductId ? { ...p, active: nextActiveState } : p) : null
     );
 
-    // 2. Silent backend patch request
     try {
       await fetch(`${BASE_URL}/v1/admin/catalog/visibility/${shopProductId}?active=${nextActiveState}`, {
         method: 'PATCH',
@@ -659,11 +642,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           onPress={() => setShowSidebar(!showSidebar)} 
           activeOpacity={0.7}
         >
-          <Svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={showSidebar ? "#FFFFFF" : "#D2691E"} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <Path d="M4 5h16" />
-            <Path d="M4 12h16" />
-            <Path d="M4 19h16" />
-          </Svg>
+          <Text style={[styles.headerToggleText, showSidebar && { color: '#FFFFFF' }]}>☰</Text>
         </TouchableOpacity>
         
         <Text style={styles.mainHeaderTitle}>Products & Categories</Text>
@@ -673,9 +652,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           onPress={() => setIsProductModalOpen(true)} 
           activeOpacity={0.7}
         >
-          <Svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={isProductModalOpen ? "#FFFFFF" : "#2B1E1A"} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-            <Path d="M12 5v14M5 12h14" />
-          </Svg>
+          <Text style={[styles.headerPlusText, isProductModalOpen && { color: '#FFFFFF' }]}>＋</Text>
         </TouchableOpacity>
       </View>
 
@@ -823,9 +800,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
                   </Text>
                   
                   <View style={styles.plusVariantIconButton}>
-                    <Svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                      <Path d="M12 5v14M5 12h14" />
-                    </Svg>
+                    <Text style={styles.plusVariantIconSymbol}>＋</Text>
                   </View>
                 </View>
               </TouchableOpacity>
@@ -927,10 +902,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
 const styles = StyleSheet.create({
   viewMainWrapper: { flex: 1, backgroundColor: '#FFFBF7' },
-  topRunningLoader: { position: 'absolute', top: 5, right: 15, zIndex: 999 },
   topControlHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0E2D3', backgroundColor: '#FFFFFF' },
-  leftPlusActionBtn: { padding: 6, borderRadius: 8, backgroundColor: '#FFF5EA' },
-  rightPlusActionBtn: { padding: 6, borderRadius: 8, backgroundColor: '#F5ECE2' },
+  leftPlusActionBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: '#FFF5EA' },
+  rightPlusActionBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: '#F5ECE2' },
+  headerToggleText: { fontSize: 16, fontWeight: '800', color: '#D2691E' },
+  headerPlusText: { fontSize: 16, fontWeight: '800', color: '#2B1E1A' },
   mainHeaderTitle: { fontSize: 19, fontWeight: '800', color: '#2B1E1A' },
   workspaceSplitterContainer: { flex: 1, flexDirection: 'row' },
   leftNavigationSidebar: { width: 95, backgroundColor: '#F5E6D3', borderRightWidth: 1, borderRightColor: '#E6D4BF' },
@@ -951,9 +927,10 @@ const styles = StyleSheet.create({
   productVisibilityBadge: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginRight: 4 },
   eyeActiveBg: { backgroundColor: 'rgba(43, 30, 26, 0.85)' },
   eyeInactiveBg: { backgroundColor: 'rgba(43, 30, 26, 0.45)' },
+  actionBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
   productPencilBadge: { backgroundColor: 'rgba(43, 30, 26, 0.85)', width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginRight: 4 },
-  productTrashBadge: { backgroundColor: 'rgba(210, 105, 30, 0.9)', width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
-  trashText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
+  productTrashBadge: { backgroundColor: 'rgba(210, 105, 30, 0.9)', paddingHorizontal: 6, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  trashText: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
   blankImageSectionPlaceholder: { height: 115, backgroundColor: '#F7EFE5', alignItems: 'center', justifyContent: 'center' },
   catalogRenderedImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   zeptoCoreAssetCircle: { width: 65, height: 65, borderRadius: 32, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
@@ -981,6 +958,7 @@ const styles = StyleSheet.create({
   variantSelectorToggle: { paddingVertical: 12, paddingHorizontal: 16, borderRadius: 8, borderStyle: 'dashed', borderWidth: 1.5, borderColor: '#D2691E', marginVertical: 14 },
   variantToggleInnerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   plusVariantIconButton: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#D2691E', alignItems: 'center', justifyContent: 'center' },
+  plusVariantIconSymbol: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   variantContainerBox: { backgroundColor: '#FFFBF7', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#E6D4BF', marginBottom: 10 },
   variantSectionHeaderTitle: { fontSize: 12, fontWeight: '700', color: '#5C4033', marginBottom: 6 },
   pushVariantBtn: { backgroundColor: '#5C4033', height: 36, borderRadius: 6, alignItems: 'center', justifyContent: 'center', marginTop: 12 },
