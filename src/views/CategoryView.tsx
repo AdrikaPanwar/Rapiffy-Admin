@@ -17,6 +17,7 @@ import {
   ActivityIndicator
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Path } from 'react-native-svg';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BottomNavBar } from '../components/BottomNavBar';
@@ -106,7 +107,19 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
           onPress={() => onToggleVisibility(item.shopProductId, isVisible)}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Text style={styles.actionBadgeText}>{isVisible ? 'O' : 'X'}</Text>
+          {isVisible ? (
+            <Svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+              <Path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+              <Path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+            </Svg>
+          ) : (
+            <Svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+              <Path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+              <Path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+              <Path d="M6.61 6.61A13.52 13.52 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+              <Path d="M2 2l20 20" />
+            </Svg>
+          )}
         </TouchableOpacity>
 
         <TouchableOpacity 
@@ -114,7 +127,9 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
           onPress={() => onEdit(item)}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Text style={styles.actionBadgeText}>E</Text>
+          <Svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <Path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4Z"/>
+          </Svg>
         </TouchableOpacity>
 
         {item.unlisted !== false && (
@@ -927,7 +942,6 @@ const styles = StyleSheet.create({
   productVisibilityBadge: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginRight: 4 },
   eyeActiveBg: { backgroundColor: 'rgba(43, 30, 26, 0.85)' },
   eyeInactiveBg: { backgroundColor: 'rgba(43, 30, 26, 0.45)' },
-  actionBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800' },
   productPencilBadge: { backgroundColor: 'rgba(43, 30, 26, 0.85)', width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginRight: 4 },
   productTrashBadge: { backgroundColor: 'rgba(210, 105, 30, 0.9)', paddingHorizontal: 6, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   trashText: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
