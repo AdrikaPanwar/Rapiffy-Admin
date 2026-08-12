@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import * as Updates from 'expo-updates';
+import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { AdminLoginController } from './src/controlllers/AdminLoginController';
 
 export default function App() {
@@ -27,5 +28,9 @@ export default function App() {
     }
   }, []);
 
-  return <AdminLoginController />;
+  return (
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <AdminLoginController />
+    </SafeAreaProvider>
+  );
 }
