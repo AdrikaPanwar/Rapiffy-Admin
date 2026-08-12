@@ -3,12 +3,13 @@ import {
   StyleSheet,
   Text,
   View,
-  ScrollView,
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
   StatusBar,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
@@ -17,9 +18,8 @@ import { BottomNavBar } from '../components/BottomNavBar';
 
 const BASE_URL = 'https://rapiffy-backend-1.onrender.com';
 
-// GET /v1/admin/orders — status query values from the Admin Orders Swagger spec.
-const STATUS_FILTERS = [
-  'ALL',
+// GET /v1/admin/orders — status query dropdown values from the Swagger schema.
+const STATUS_SCHEMA_VALUES = [
   'PAYMENT_PENDING',
   'PENDING',
   'CONFIRMED',
@@ -29,6 +29,8 @@ const STATUS_FILTERS = [
   'CANCELLED',
   'REJECTED',
 ] as const;
+
+const STATUS_FILTERS = ['ALL', ...STATUS_SCHEMA_VALUES] as const;
 
 type OrderStatusFilter = (typeof STATUS_FILTERS)[number];
 
@@ -47,6 +49,23 @@ export interface OrderSummary {
   createdAt: string;
 }
 
+const SCHEMA_FIELD_ORDER: Array<keyof OrderSummary> = [
+  'orderId',
+  'orderNumber',
+  'customerPhone',
+  'customerName',
+  'subtotal',
+  'totalGst',
+  'deliveryCharge',
+  'totalAmount',
+  'totalItems',
+  'status',
+  'deliveryType',
+  'createdAt',
+];
+
+const MONEY_FIELDS: Array<keyof OrderSummary> = ['subtotal', 'totalGst', 'deliveryCharge', 'totalAmount'];
+
 export interface OrderViewProps {
   onNavigate?: (screen: 'login' | 'forgot_password' | 'home' | 'category' | 'coverage' | 'order' | 'profile') => void;
   authToken?: string;
@@ -63,11 +82,7 @@ const STATUS_COLORS: Record<string, string> = {
   REJECTED: '#C62828',
 };
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
 const getStatusColor = (status: string): string => STATUS_COLORS[status] || '#5C4033';
-
-const prettyStatus = (status: string): string => String(status || '').replace(/_/g, ' ');
 
 const formatMoney = (value: number): string => {
   const n = Number(value);
@@ -75,24 +90,17 @@ const formatMoney = (value: number): string => {
   return `₹${n.toFixed(2)}`;
 };
 
-const formatDate = (iso: string): string => {
-  if (!iso) return '-';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return String(iso);
-  const day = d.getDate();
-  const month = MONTHS[d.getMonth()];
-  const year = d.getFullYear();
-  let hours = d.getHours();
-  const minutes = d.getMinutes().toString().padStart(2, '0');
-  const ampm = hours >= 12 ? 'PM' : 'AM';
-  hours = hours % 12;
-  if (hours === 0) hours = 12;
-  return `${day} ${month} ${year}, ${hours}:${minutes} ${ampm}`;
-};
-
 const toNumber = (value: any, fallback = 0): number => {
   const n = Number(value);
   return isNaN(n) ? fallback : n;
+};
+
+const formatSchemaValue = (field: keyof OrderSummary, value: OrderSummary[keyof OrderSummary]): string => {
+  if (MONEY_FIELDS.includes(field)) {
+    return formatMoney(toNumber(value));
+  }
+  if (value == null || value === '') return '-';
+  return String(value);
 };
 
 const normalizeSummary = (raw: any): OrderSummary | null => {
@@ -145,6 +153,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState<OrderStatusFilter>('ALL');
+  const [isStatusDropdownOpen, setIsStatusDropdownOpen] = useState<boolean>(false);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [outOfStockIds, setOutOfStockIds] = useState<Set<number>>(new Set());
 
@@ -157,8 +166,14 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
   }, [authToken]);
 
   const fetchOrders = useCallback(
-    async (statusFilter: OrderStatusFilter, mode: 'initial' | 'refresh' = 'initial') => {
+    async (
+      statusFilter: OrderStatusFilter,
+      mode: 'initial' | 'refresh' = 'initial',
+      signal?: AbortSignal,
+    ) => {
       const token = await resolveToken();
+
+      if (signal?.aborted) return;
 
       if (!token) {
         setErrorMessage('You are not logged in. Please sign in again.');
@@ -175,6 +190,17 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       }
       setErrorMessage(null);
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      const onParentAbort = () => controller.abort();
+      if (signal) {
+        if (signal.aborted) {
+          clearTimeout(timeoutId);
+          return;
+        }
+        signal.addEventListener('abort', onParentAbort);
+      }
+
       try {
         const query = statusFilter !== 'ALL' ? `?status=${encodeURIComponent(statusFilter)}` : '';
         const response = await fetch(`${BASE_URL}/v1/admin/orders${query}`, {
@@ -183,7 +209,10 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
             accept: '*/*',
             Authorization: `Bearer ${token}`,
           },
+          signal: controller.signal,
         });
+
+        if (signal?.aborted) return;
 
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) {
@@ -208,24 +237,37 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
           .map(normalizeSummary)
           .filter((item: OrderSummary | null): item is OrderSummary => item !== null);
 
+        if (signal?.aborted) return;
         setOrders(normalized);
-      } catch {
+      } catch (error: any) {
+        if (error?.name === 'AbortError' || signal?.aborted) {
+          return;
+        }
         setErrorMessage('Network error. Please check your connection and try again.');
         setOrders([]);
       } finally {
-        setIsLoading(false);
-        setIsRefreshing(false);
+        clearTimeout(timeoutId);
+        if (signal) {
+          signal.removeEventListener('abort', onParentAbort);
+        }
+        if (!signal?.aborted) {
+          setIsLoading(false);
+          setIsRefreshing(false);
+        }
       }
     },
     [resolveToken],
   );
 
   useEffect(() => {
-    fetchOrders(selectedStatus, 'initial');
+    const controller = new AbortController();
+    fetchOrders(selectedStatus, 'initial', controller.signal);
+    return () => controller.abort();
   }, [selectedStatus, fetchOrders]);
 
   const handleSelectStatus = useCallback((status: OrderStatusFilter) => {
     setSelectedStatus(status);
+    setIsStatusDropdownOpen(false);
     setExpandedIds(new Set());
   }, []);
 
@@ -295,7 +337,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
               <View style={styles.headerRightBlock}>
                 <View style={[styles.statusPill, { backgroundColor: `${statusColor}1A`, borderColor: statusColor }]}>
                   <Text style={[styles.statusPillText, { color: statusColor }]} numberOfLines={1}>
-                    {prettyStatus(item.status)}
+                    {item.status || '-'}
                   </Text>
                 </View>
                 <Text style={styles.headerAmountText}>{formatMoney(item.totalAmount)}</Text>
@@ -309,22 +351,13 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
 
           {isExpanded && (
             <View style={styles.cardBody}>
-              <DetailRow label="Order ID" value={String(item.orderId)} />
-              <DetailRow label="Customer phone" value={item.customerPhone || '-'} />
-              <DetailRow label="Total items" value={String(item.totalItems)} />
-              <DetailRow label="Delivery type" value={item.deliveryType || '-'} />
-              <DetailRow label="Placed on" value={formatDate(item.createdAt)} />
-
-              <View style={styles.divider} />
-
-              <DetailRow label="Subtotal" value={formatMoney(item.subtotal)} />
-              <DetailRow label="GST" value={formatMoney(item.totalGst)} />
-              <DetailRow label="Delivery charge" value={formatMoney(item.deliveryCharge)} />
-
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Total amount</Text>
-                <Text style={styles.totalValue}>{formatMoney(item.totalAmount)}</Text>
-              </View>
+              {SCHEMA_FIELD_ORDER.map((field) => (
+                <DetailRow
+                  key={field}
+                  label={field}
+                  value={formatSchemaValue(field, item[field])}
+                />
+              ))}
 
               <TouchableOpacity
                 style={[styles.stockActionBtn, isSelected ? styles.stockActionBtnOut : styles.stockActionBtnIn]}
@@ -370,24 +403,45 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       </View>
 
       <View style={styles.filterBar}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScrollContent}>
-          {STATUS_FILTERS.map((status) => {
-            const isActive = selectedStatus === status;
-            return (
-              <TouchableOpacity
-                key={status}
-                style={[styles.filterChip, isActive && styles.filterChipActive]}
-                onPress={() => handleSelectStatus(status)}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>
-                  {prettyStatus(status)}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+        <Text style={styles.filterLabel}>status</Text>
+        <TouchableOpacity
+          style={styles.dropdownButton}
+          onPress={() => setIsStatusDropdownOpen(true)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.dropdownButtonText}>{selectedStatus}</Text>
+          <ChevronIcon open={isStatusDropdownOpen} />
+        </TouchableOpacity>
+        <Text style={styles.filterHint}>Available values from schema dropdown</Text>
       </View>
+
+      <Modal
+        visible={isStatusDropdownOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsStatusDropdownOpen(false)}
+      >
+        <Pressable style={styles.dropdownBackdrop} onPress={() => setIsStatusDropdownOpen(false)}>
+          <Pressable style={styles.dropdownSheet} onPress={() => {}}>
+            <Text style={styles.dropdownTitle}>status</Text>
+            {STATUS_FILTERS.map((status) => {
+              const isActive = selectedStatus === status;
+              return (
+                <TouchableOpacity
+                  key={status}
+                  style={[styles.dropdownOption, isActive && styles.dropdownOptionActive]}
+                  onPress={() => handleSelectStatus(status)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.dropdownOptionText, isActive && styles.dropdownOptionTextActive]}>
+                    {status}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <View style={styles.contentArea}>
         {isLoading && orders.length === 0 ? (
@@ -406,7 +460,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
           <View style={styles.centerState}>
             <Text style={styles.emptyTitle}>No orders found</Text>
             <Text style={styles.emptySubtitle}>
-              {selectedStatus === 'ALL' ? 'There are no orders yet.' : `No orders with status "${prettyStatus(selectedStatus)}".`}
+              {selectedStatus === 'ALL' ? 'There are no orders yet.' : `No orders with status "${selectedStatus}".`}
             </Text>
           </View>
         ) : (
@@ -443,20 +497,57 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 19, fontWeight: '800', color: '#2B1E1A' },
   refreshBtn: { padding: 6, borderRadius: 8, backgroundColor: '#FFF5EA' },
-  filterBar: { backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#F0E2D3' },
-  filterScrollContent: { paddingHorizontal: 12, paddingVertical: 10 },
-  filterChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 20,
-    backgroundColor: '#F5ECE2',
-    marginRight: 8,
+  filterBar: {
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0E2D3',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 12,
+  },
+  filterLabel: { fontSize: 11, fontWeight: '800', color: '#A89685', marginBottom: 6 },
+  dropdownButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     borderWidth: 1,
     borderColor: '#E6D4BF',
+    backgroundColor: '#FFFBF7',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  filterChipActive: { backgroundColor: '#D2691E', borderColor: '#D2691E' },
-  filterChipText: { fontSize: 12, fontWeight: '700', color: '#5C4033' },
-  filterChipTextActive: { color: '#FFFFFF' },
+  dropdownButtonText: { fontSize: 13, fontWeight: '800', color: '#2B1E1A' },
+  filterHint: { fontSize: 10, color: '#A89685', fontWeight: '600', marginTop: 6 },
+  dropdownBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(43, 30, 26, 0.35)',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  dropdownSheet: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#F0E2D3',
+  },
+  dropdownTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#A89685',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  dropdownOption: {
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderRadius: 8,
+  },
+  dropdownOptionActive: { backgroundColor: '#D2691E' },
+  dropdownOptionText: { fontSize: 13, fontWeight: '700', color: '#2B1E1A' },
+  dropdownOptionTextActive: { color: '#FFFFFF' },
   contentArea: { flex: 1 },
   centerState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   centerStateText: { fontSize: 12, color: '#A89685', fontWeight: '700', marginTop: 10 },
@@ -496,26 +587,14 @@ const styles = StyleSheet.create({
   outOfStockTagText: { color: '#FFFFFF', fontSize: 8, fontWeight: '800' },
   customerNameText: { fontSize: 11.5, color: '#5C4033', fontWeight: '600', marginTop: 2 },
   headerRightBlock: { alignItems: 'flex-end', marginRight: 6 },
-  statusPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, borderWidth: 1, maxWidth: 120 },
+  statusPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, borderWidth: 1, maxWidth: 150 },
   statusPillText: { fontSize: 9.5, fontWeight: '800' },
   headerAmountText: { fontSize: 13, fontWeight: '800', color: '#2B1E1A', marginTop: 4 },
   chevronWrap: { width: 22, alignItems: 'center', justifyContent: 'center' },
   cardBody: { paddingHorizontal: 14, paddingBottom: 14, paddingTop: 2, borderTopWidth: 1, borderTopColor: '#F5ECE2' },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 5 },
   detailLabel: { fontSize: 12, color: '#A89685', fontWeight: '600' },
-  detailValue: { fontSize: 12.5, color: '#2B1E1A', fontWeight: '700', flexShrink: 1, textAlign: 'right', marginLeft: 12 },
-  divider: { height: 1, backgroundColor: '#F0E2D3', marginVertical: 8 },
-  totalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#F0E2D3',
-  },
-  totalLabel: { fontSize: 13, fontWeight: '800', color: '#2B1E1A' },
-  totalValue: { fontSize: 15, fontWeight: '800', color: '#D2691E' },
+  detailValue: { fontSize: 12.5, color: '#2B1E1A', fontWeight: '700', flexShrink: 1, textAlign: 'right', marginLeft: 12, maxWidth: '62%' },
   stockActionBtn: { marginTop: 14, height: 42, borderRadius: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5 },
   stockActionBtnOut: { backgroundColor: '#FFFFFF', borderColor: '#C62828' },
   stockActionBtnIn: { backgroundColor: '#137A63', borderColor: '#137A63' },
