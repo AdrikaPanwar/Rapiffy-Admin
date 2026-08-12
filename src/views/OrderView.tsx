@@ -157,8 +157,14 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
   }, [authToken]);
 
   const fetchOrders = useCallback(
-    async (statusFilter: OrderStatusFilter, mode: 'initial' | 'refresh' = 'initial') => {
+    async (
+      statusFilter: OrderStatusFilter,
+      mode: 'initial' | 'refresh' = 'initial',
+      signal?: AbortSignal,
+    ) => {
       const token = await resolveToken();
+
+      if (signal?.aborted) return;
 
       if (!token) {
         setErrorMessage('You are not logged in. Please sign in again.');
@@ -175,6 +181,17 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       }
       setErrorMessage(null);
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      const onParentAbort = () => controller.abort();
+      if (signal) {
+        if (signal.aborted) {
+          clearTimeout(timeoutId);
+          return;
+        }
+        signal.addEventListener('abort', onParentAbort);
+      }
+
       try {
         const query = statusFilter !== 'ALL' ? `?status=${encodeURIComponent(statusFilter)}` : '';
         const response = await fetch(`${BASE_URL}/v1/admin/orders${query}`, {
@@ -183,7 +200,10 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
             accept: '*/*',
             Authorization: `Bearer ${token}`,
           },
+          signal: controller.signal,
         });
+
+        if (signal?.aborted) return;
 
         if (!response.ok) {
           if (response.status === 401 || response.status === 403) {
@@ -208,20 +228,32 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
           .map(normalizeSummary)
           .filter((item: OrderSummary | null): item is OrderSummary => item !== null);
 
+        if (signal?.aborted) return;
         setOrders(normalized);
-      } catch {
+      } catch (error: any) {
+        if (error?.name === 'AbortError' || signal?.aborted) {
+          return;
+        }
         setErrorMessage('Network error. Please check your connection and try again.');
         setOrders([]);
       } finally {
-        setIsLoading(false);
-        setIsRefreshing(false);
+        clearTimeout(timeoutId);
+        if (signal) {
+          signal.removeEventListener('abort', onParentAbort);
+        }
+        if (!signal?.aborted) {
+          setIsLoading(false);
+          setIsRefreshing(false);
+        }
       }
     },
     [resolveToken],
   );
 
   useEffect(() => {
-    fetchOrders(selectedStatus, 'initial');
+    const controller = new AbortController();
+    fetchOrders(selectedStatus, 'initial', controller.signal);
+    return () => controller.abort();
   }, [selectedStatus, fetchOrders]);
 
   const handleSelectStatus = useCallback((status: OrderStatusFilter) => {
