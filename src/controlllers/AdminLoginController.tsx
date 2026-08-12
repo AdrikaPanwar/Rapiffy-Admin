@@ -224,7 +224,7 @@ export const AdminLoginController: React.FC = () => {
       return <CoverageView onNavigate={(screen) => setCurrentScreen(screen)} />;
     }
     if (currentScreen === 'order') {
-      return <OrderView onNavigate={(screen) => setCurrentScreen(screen)} />;
+      return <OrderView onNavigate={(screen) => setCurrentScreen(screen)} authToken={authToken} />;
     }
     if (currentScreen === 'profile') {
       return <ProfileView onNavigate={(screen) => setCurrentScreen(screen)} onLogout={handleLogout} />;
