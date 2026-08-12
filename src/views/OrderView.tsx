@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   RefreshControl,
   StatusBar,
-  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
@@ -18,6 +17,7 @@ import { BottomNavBar } from '../components/BottomNavBar';
 
 const BASE_URL = 'https://rapiffy-backend-1.onrender.com';
 
+// GET /v1/admin/orders — status query values from the Admin Orders Swagger spec.
 const STATUS_FILTERS = [
   'ALL',
   'PAYMENT_PENDING',
@@ -45,29 +45,6 @@ export interface OrderSummary {
   status: string;
   deliveryType: string;
   createdAt: string;
-}
-
-export interface OrderLineItem {
-  orderItemId: number;
-  shopProductId: number | null;
-  productName: string;
-  brand: string;
-  unit: string;
-  unitValue: string;
-  imageUrl: string | null;
-  mrp: number;
-  sellingPrice: number;
-  quantity: number;
-  gstSlab: string;
-  gstAmount: number;
-  lineTotal: number;
-}
-
-export interface OrderDetail extends OrderSummary {
-  invoiceId?: string | null;
-  shopName?: string;
-  deliveryAddress?: string;
-  items: OrderLineItem[];
 }
 
 export interface OrderViewProps {
@@ -113,17 +90,6 @@ const formatDate = (iso: string): string => {
   return `${day} ${month} ${year}, ${hours}:${minutes} ${ampm}`;
 };
 
-const itemStockKey = (orderId: number, orderItemId: number): string => `${orderId}:${orderItemId}`;
-
-const extractOrdersArray = (payload: any): any[] => {
-  if (Array.isArray(payload)) return payload;
-  if (!payload || typeof payload !== 'object') return [];
-  if (Array.isArray(payload.data)) return payload.data;
-  if (Array.isArray(payload.orders)) return payload.orders;
-  if (Array.isArray(payload.content)) return payload.content;
-  return [];
-};
-
 const toNumber = (value: any, fallback = 0): number => {
   const n = Number(value);
   return isNaN(n) ? fallback : n;
@@ -146,43 +112,6 @@ const normalizeSummary = (raw: any): OrderSummary | null => {
     status: String(raw.status || ''),
     deliveryType: String(raw.deliveryType || ''),
     createdAt: String(raw.createdAt || ''),
-  };
-};
-
-const normalizeLineItem = (raw: any): OrderLineItem | null => {
-  if (!raw || typeof raw !== 'object') return null;
-  const orderItemId = toNumber(raw.orderItemId, NaN);
-  if (isNaN(orderItemId)) return null;
-  return {
-    orderItemId,
-    shopProductId: raw.shopProductId == null ? null : toNumber(raw.shopProductId),
-    productName: String(raw.productName || 'Item'),
-    brand: String(raw.brand || ''),
-    unit: String(raw.unit || ''),
-    unitValue: String(raw.unitValue || ''),
-    imageUrl: typeof raw.imageUrl === 'string' ? raw.imageUrl : null,
-    mrp: toNumber(raw.mrp),
-    sellingPrice: toNumber(raw.sellingPrice),
-    quantity: toNumber(raw.quantity),
-    gstSlab: String(raw.gstSlab || ''),
-    gstAmount: toNumber(raw.gstAmount),
-    lineTotal: toNumber(raw.lineTotal),
-  };
-};
-
-const normalizeDetail = (raw: any, fallback: OrderSummary): OrderDetail => {
-  const summary = normalizeSummary(raw) || fallback;
-  const itemsSource = Array.isArray(raw?.items) ? raw.items : [];
-  const items = itemsSource
-    .map(normalizeLineItem)
-    .filter((item: OrderLineItem | null): item is OrderLineItem => item !== null);
-
-  return {
-    ...summary,
-    invoiceId: raw?.invoiceId != null ? String(raw.invoiceId) : null,
-    shopName: raw?.shopName != null ? String(raw.shopName) : undefined,
-    deliveryAddress: raw?.deliveryAddress != null ? String(raw.deliveryAddress) : undefined,
-    items,
   };
 };
 
@@ -216,12 +145,8 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedStatus, setSelectedStatus] = useState<OrderStatusFilter>('ALL');
-
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
-  const [orderDetails, setOrderDetails] = useState<Record<number, OrderDetail>>({});
-  const [detailLoadingIds, setDetailLoadingIds] = useState<Set<number>>(new Set());
-  const [detailErrorById, setDetailErrorById] = useState<Record<number, string>>({});
-  const [outOfStockItemKeys, setOutOfStockItemKeys] = useState<Set<string>>(new Set());
+  const [outOfStockIds, setOutOfStockIds] = useState<Set<number>>(new Set());
 
   const resolveToken = useCallback(async (): Promise<string | null> => {
     const fromProp = authToken && authToken.trim() !== '' ? authToken.trim() : '';
@@ -251,7 +176,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       setErrorMessage(null);
 
       try {
-        const query = statusFilter && statusFilter !== 'ALL' ? `?status=${encodeURIComponent(statusFilter)}` : '';
+        const query = statusFilter !== 'ALL' ? `?status=${encodeURIComponent(statusFilter)}` : '';
         const response = await fetch(`${BASE_URL}/v1/admin/orders${query}`, {
           method: 'GET',
           headers: {
@@ -278,7 +203,8 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
           payload = [];
         }
 
-        const normalized = extractOrdersArray(payload)
+        const list = Array.isArray(payload) ? payload : [];
+        const normalized = list
           .map(normalizeSummary)
           .filter((item: OrderSummary | null): item is OrderSummary => item !== null);
 
@@ -294,74 +220,6 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
     [resolveToken],
   );
 
-  const fetchOrderDetail = useCallback(
-    async (orderId: number, fallback: OrderSummary) => {
-      const token = await resolveToken();
-      if (!token) {
-        setDetailErrorById((prev) => ({ ...prev, [orderId]: 'You are not logged in.' }));
-        return;
-      }
-
-      setDetailLoadingIds((prev) => {
-        const next = new Set(prev);
-        next.add(orderId);
-        return next;
-      });
-      setDetailErrorById((prev) => {
-        const next = { ...prev };
-        delete next[orderId];
-        return next;
-      });
-
-      try {
-        const response = await fetch(`${BASE_URL}/v1/admin/orders/${orderId}`, {
-          method: 'GET',
-          headers: {
-            accept: '*/*',
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (!response.ok) {
-          setDetailErrorById((prev) => ({
-            ...prev,
-            [orderId]: `Could not load items (error ${response.status}).`,
-          }));
-          return;
-        }
-
-        const responseText = await response.text();
-        let payload: any = {};
-        try {
-          payload = JSON.parse(responseText);
-        } catch {
-          payload = {};
-        }
-
-        const detailSource = payload && typeof payload === 'object' && payload.data && !Array.isArray(payload.data)
-          ? payload.data
-          : payload;
-
-        setOrderDetails((prev) => ({
-          ...prev,
-          [orderId]: normalizeDetail(detailSource, fallback),
-        }));
-      } catch {
-        setDetailErrorById((prev) => ({
-          ...prev,
-          [orderId]: 'Network error while loading items.',
-        }));
-      } finally {
-        setDetailLoadingIds((prev) => {
-          const next = new Set(prev);
-          next.delete(orderId);
-          return next;
-        });
-      }
-    },
-    [resolveToken],
-  );
-
   useEffect(() => {
     fetchOrders(selectedStatus, 'initial');
   }, [selectedStatus, fetchOrders]);
@@ -371,133 +229,83 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
     setExpandedIds(new Set());
   }, []);
 
-  const handleToggleExpand = useCallback(
-    (order: OrderSummary) => {
-      const isOpen = expandedIds.has(order.orderId);
-      setExpandedIds((prev) => {
-        const next = new Set(prev);
-        if (isOpen) {
-          next.delete(order.orderId);
-        } else {
-          next.add(order.orderId);
-        }
-        return next;
-      });
-      if (!isOpen && !orderDetails[order.orderId]) {
-        fetchOrderDetail(order.orderId, order);
-      }
-    },
-    [expandedIds, fetchOrderDetail, orderDetails],
-  );
-
-  const toggleItemOutOfStock = useCallback((orderId: number, orderItemId: number) => {
-    const key = itemStockKey(orderId, orderItemId);
-    setOutOfStockItemKeys((prev) => {
+  const handleToggleExpand = useCallback((orderId: number) => {
+    setExpandedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
+      if (next.has(orderId)) {
+        next.delete(orderId);
       } else {
-        next.add(key);
+        next.add(orderId);
       }
       return next;
     });
   }, []);
 
-  const renderLineItem = useCallback(
-    (orderId: number, item: OrderLineItem) => {
-      const isSelected = !outOfStockItemKeys.has(itemStockKey(orderId, item.orderItemId));
-      const unitLabel = [item.unitValue, item.unit].filter(Boolean).join(' ');
-
-      return (
-        <View key={`item_${orderId}_${item.orderItemId}`} style={[styles.itemSection, !isSelected && styles.itemSectionMuted]}>
-          <TouchableOpacity
-            style={[styles.checkbox, isSelected ? styles.checkboxOn : styles.checkboxOff]}
-            onPress={() => toggleItemOutOfStock(orderId, item.orderItemId)}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            activeOpacity={0.7}
-          >
-            {isSelected ? <CheckIcon /> : null}
-          </TouchableOpacity>
-
-          {item.imageUrl && item.imageUrl.startsWith('http') ? (
-            <Image source={{ uri: item.imageUrl }} style={styles.itemImage} />
-          ) : (
-            <View style={styles.itemImageFallback}>
-              <Text style={styles.itemImageFallbackText}>
-                {item.productName ? item.productName.charAt(0).toUpperCase() : '?'}
-              </Text>
-            </View>
-          )}
-
-          <View style={styles.itemTextBlock}>
-            <View style={styles.itemTitleRow}>
-              <Text style={[styles.itemName, !isSelected && styles.strikeThrough]} numberOfLines={2}>
-                {item.productName}
-              </Text>
-              {!isSelected && (
-                <View style={styles.outOfStockTag}>
-                  <Text style={styles.outOfStockTagText}>OUT OF STOCK</Text>
-                </View>
-              )}
-            </View>
-            {!!item.brand && <Text style={styles.itemMeta} numberOfLines={1}>{item.brand}</Text>}
-            <Text style={styles.itemMeta} numberOfLines={1}>
-              Qty {item.quantity}{unitLabel ? ` · ${unitLabel}` : ''}
-            </Text>
-          </View>
-
-          <Text style={[styles.itemPrice, !isSelected && styles.strikeThrough]}>{formatMoney(item.lineTotal)}</Text>
-        </View>
-      );
-    },
-    [outOfStockItemKeys, toggleItemOutOfStock],
-  );
+  const toggleOutOfStock = useCallback((orderId: number) => {
+    setOutOfStockIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) {
+        next.delete(orderId);
+      } else {
+        next.add(orderId);
+      }
+      return next;
+    });
+  }, []);
 
   const renderOrderCard = useCallback(
     ({ item }: { item: OrderSummary }) => {
       const isExpanded = expandedIds.has(item.orderId);
+      const isSelected = !outOfStockIds.has(item.orderId);
       const statusColor = getStatusColor(item.status);
-      const detail = orderDetails[item.orderId];
-      const isDetailLoading = detailLoadingIds.has(item.orderId);
-      const detailError = detailErrorById[item.orderId];
-      const items = detail && Array.isArray(detail.items) ? detail.items : [];
-      const selectedItems = items.filter(
-        (line) => !outOfStockItemKeys.has(itemStockKey(item.orderId, line.orderItemId)),
-      );
-      const selectedTotal = selectedItems.reduce((sum, line) => sum + toNumber(line.lineTotal), 0);
-      const hasUnselected = items.length > 0 && selectedItems.length !== items.length;
 
       return (
-        <View style={styles.orderCard}>
-          <TouchableOpacity
-            style={styles.cardHeaderRow}
-            onPress={() => handleToggleExpand(item)}
-            activeOpacity={0.8}
-          >
-            <View style={styles.headerTextBlock}>
-              <View style={styles.headerTopLine}>
-                <Text style={styles.orderNumberText} numberOfLines={1}>
-                  #{item.orderNumber || item.orderId}
+        <View style={[styles.orderCard, !isSelected && styles.orderCardMuted]}>
+          <View style={styles.cardHeaderRow}>
+            <TouchableOpacity
+              style={[styles.checkbox, isSelected ? styles.checkboxOn : styles.checkboxOff]}
+              onPress={() => toggleOutOfStock(item.orderId)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              activeOpacity={0.7}
+            >
+              {isSelected ? <CheckIcon /> : null}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.headerTapZone}
+              onPress={() => handleToggleExpand(item.orderId)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.headerTextBlock}>
+                <View style={styles.headerTopLine}>
+                  <Text style={[styles.orderNumberText, !isSelected && styles.strikeThrough]} numberOfLines={1}>
+                    #{item.orderNumber || item.orderId}
+                  </Text>
+                  {!isSelected && (
+                    <View style={styles.outOfStockTag}>
+                      <Text style={styles.outOfStockTagText}>OUT OF STOCK</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.customerNameText} numberOfLines={1}>
+                  {item.customerName || item.customerPhone || 'Unknown customer'}
                 </Text>
               </View>
-              <Text style={styles.customerNameText} numberOfLines={1}>
-                {item.customerName || item.customerPhone || 'Unknown customer'}
-              </Text>
-            </View>
 
-            <View style={styles.headerRightBlock}>
-              <View style={[styles.statusPill, { backgroundColor: `${statusColor}1A`, borderColor: statusColor }]}>
-                <Text style={[styles.statusPillText, { color: statusColor }]} numberOfLines={1}>
-                  {prettyStatus(item.status)}
-                </Text>
+              <View style={styles.headerRightBlock}>
+                <View style={[styles.statusPill, { backgroundColor: `${statusColor}1A`, borderColor: statusColor }]}>
+                  <Text style={[styles.statusPillText, { color: statusColor }]} numberOfLines={1}>
+                    {prettyStatus(item.status)}
+                  </Text>
+                </View>
+                <Text style={styles.headerAmountText}>{formatMoney(item.totalAmount)}</Text>
               </View>
-              <Text style={styles.headerAmountText}>{formatMoney(item.totalAmount)}</Text>
-            </View>
 
-            <View style={styles.chevronWrap}>
-              <ChevronIcon open={isExpanded} />
-            </View>
-          </TouchableOpacity>
+              <View style={styles.chevronWrap}>
+                <ChevronIcon open={isExpanded} />
+              </View>
+            </TouchableOpacity>
+          </View>
 
           {isExpanded && (
             <View style={styles.cardBody}>
@@ -506,34 +314,6 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
               <DetailRow label="Total items" value={String(item.totalItems)} />
               <DetailRow label="Delivery type" value={item.deliveryType || '-'} />
               <DetailRow label="Placed on" value={formatDate(item.createdAt)} />
-              {detail?.deliveryAddress ? <DetailRow label="Address" value={detail.deliveryAddress} /> : null}
-
-              <View style={styles.divider} />
-
-              <Text style={styles.itemsHeading}>Items</Text>
-              <Text style={styles.itemsHint}>Un-select any item that has gone out of stock.</Text>
-
-              {isDetailLoading && items.length === 0 ? (
-                <View style={styles.itemLoadingRow}>
-                  <ActivityIndicator size="small" color="#D2691E" />
-                  <Text style={[styles.centerStateText, { marginTop: 0, marginLeft: 8 }]}>Loading items...</Text>
-                </View>
-              ) : detailError && items.length === 0 ? (
-                <View style={styles.itemErrorBlock}>
-                  <Text style={styles.itemErrorText}>{detailError}</Text>
-                  <TouchableOpacity
-                    style={styles.retryBtnSmall}
-                    onPress={() => fetchOrderDetail(item.orderId, item)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.retryBtnText}>Retry items</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : items.length === 0 ? (
-                <Text style={styles.emptyItemsText}>No line items returned for this order.</Text>
-              ) : (
-                items.map((line) => renderLineItem(item.orderId, line))
-              )}
 
               <View style={styles.divider} />
 
@@ -546,27 +326,21 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                 <Text style={styles.totalValue}>{formatMoney(item.totalAmount)}</Text>
               </View>
 
-              {hasUnselected ? (
-                <View style={styles.adjustedTotalRow}>
-                  <Text style={styles.adjustedTotalLabel}>Selected items total</Text>
-                  <Text style={styles.adjustedTotalValue}>{formatMoney(selectedTotal)}</Text>
-                </View>
-              ) : null}
+              <TouchableOpacity
+                style={[styles.stockActionBtn, isSelected ? styles.stockActionBtnOut : styles.stockActionBtnIn]}
+                onPress={() => toggleOutOfStock(item.orderId)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.stockActionText, isSelected ? styles.stockActionTextOut : styles.stockActionTextIn]}>
+                  {isSelected ? 'Mark out of stock (un-select)' : 'Restore (mark available)'}
+                </Text>
+              </TouchableOpacity>
             </View>
           )}
         </View>
       );
     },
-    [
-      detailErrorById,
-      detailLoadingIds,
-      expandedIds,
-      fetchOrderDetail,
-      handleToggleExpand,
-      orderDetails,
-      outOfStockItemKeys,
-      renderLineItem,
-    ],
+    [expandedIds, handleToggleExpand, outOfStockIds, toggleOutOfStock],
   );
 
   const keyExtractor = useCallback(
@@ -640,7 +414,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
             data={orders}
             keyExtractor={keyExtractor}
             renderItem={renderOrderCard}
-            extraData={{ expandedIds, orderDetails, detailLoadingIds, detailErrorById, outOfStockItemKeys }}
+            extraData={{ expandedIds, outOfStockIds }}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
             refreshControl={
@@ -688,7 +462,6 @@ const styles = StyleSheet.create({
   centerStateText: { fontSize: 12, color: '#A89685', fontWeight: '700', marginTop: 10 },
   errorText: { fontSize: 13, color: '#C62828', fontWeight: '700', textAlign: 'center', marginBottom: 14 },
   retryBtn: { backgroundColor: '#D2691E', paddingHorizontal: 24, paddingVertical: 10, borderRadius: 8 },
-  retryBtnSmall: { backgroundColor: '#D2691E', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, marginTop: 8 },
   retryBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   emptyTitle: { fontSize: 15, fontWeight: '800', color: '#2B1E1A', marginBottom: 6 },
   emptySubtitle: { fontSize: 12.5, color: '#A89685', fontWeight: '600', textAlign: 'center' },
@@ -701,10 +474,26 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     overflow: 'hidden',
   },
+  orderCardMuted: { opacity: 0.6 },
   cardHeaderRow: { flexDirection: 'row', alignItems: 'center', padding: 12 },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    borderWidth: 1.5,
+  },
+  checkboxOn: { backgroundColor: '#D2691E', borderColor: '#D2691E' },
+  checkboxOff: { backgroundColor: '#FFFFFF', borderColor: '#C7B7A6' },
+  headerTapZone: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   headerTextBlock: { flex: 1, paddingRight: 8 },
   headerTopLine: { flexDirection: 'row', alignItems: 'center' },
   orderNumberText: { fontSize: 14, fontWeight: '800', color: '#2B1E1A' },
+  strikeThrough: { textDecorationLine: 'line-through', color: '#A89685' },
+  outOfStockTag: { backgroundColor: '#C62828', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2, marginLeft: 6 },
+  outOfStockTagText: { color: '#FFFFFF', fontSize: 8, fontWeight: '800' },
   customerNameText: { fontSize: 11.5, color: '#5C4033', fontWeight: '600', marginTop: 2 },
   headerRightBlock: { alignItems: 'flex-end', marginRight: 6 },
   statusPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, borderWidth: 1, maxWidth: 120 },
@@ -712,57 +501,10 @@ const styles = StyleSheet.create({
   headerAmountText: { fontSize: 13, fontWeight: '800', color: '#2B1E1A', marginTop: 4 },
   chevronWrap: { width: 22, alignItems: 'center', justifyContent: 'center' },
   cardBody: { paddingHorizontal: 14, paddingBottom: 14, paddingTop: 2, borderTopWidth: 1, borderTopColor: '#F5ECE2' },
-  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingVertical: 5 },
+  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 5 },
   detailLabel: { fontSize: 12, color: '#A89685', fontWeight: '600' },
-  detailValue: { fontSize: 12.5, color: '#2B1E1A', fontWeight: '700', flexShrink: 1, textAlign: 'right', marginLeft: 12, maxWidth: '62%' },
+  detailValue: { fontSize: 12.5, color: '#2B1E1A', fontWeight: '700', flexShrink: 1, textAlign: 'right', marginLeft: 12 },
   divider: { height: 1, backgroundColor: '#F0E2D3', marginVertical: 8 },
-  itemsHeading: { fontSize: 13, fontWeight: '800', color: '#2B1E1A', marginBottom: 2 },
-  itemsHint: { fontSize: 11, color: '#A89685', fontWeight: '600', marginBottom: 10 },
-  itemLoadingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
-  itemErrorBlock: { alignItems: 'flex-start', paddingVertical: 8 },
-  itemErrorText: { fontSize: 12, color: '#C62828', fontWeight: '700' },
-  emptyItemsText: { fontSize: 12, color: '#A89685', fontWeight: '600', paddingVertical: 8 },
-  itemSection: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFBF7',
-    borderWidth: 1,
-    borderColor: '#F0E2D3',
-    borderRadius: 10,
-    padding: 8,
-    marginBottom: 8,
-  },
-  itemSectionMuted: { opacity: 0.55 },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-    borderWidth: 1.5,
-  },
-  checkboxOn: { backgroundColor: '#D2691E', borderColor: '#D2691E' },
-  checkboxOff: { backgroundColor: '#FFFFFF', borderColor: '#C7B7A6' },
-  itemImage: { width: 42, height: 42, borderRadius: 8, backgroundColor: '#F5ECE2', marginRight: 8 },
-  itemImageFallback: {
-    width: 42,
-    height: 42,
-    borderRadius: 8,
-    backgroundColor: '#F5ECE2',
-    marginRight: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  itemImageFallbackText: { fontSize: 14, fontWeight: '800', color: '#5C4033' },
-  itemTextBlock: { flex: 1, paddingRight: 6 },
-  itemTitleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
-  itemName: { fontSize: 12.5, fontWeight: '800', color: '#2B1E1A', flexShrink: 1 },
-  itemMeta: { fontSize: 11, color: '#8A7A6A', fontWeight: '600', marginTop: 1 },
-  itemPrice: { fontSize: 12.5, fontWeight: '800', color: '#2B1E1A' },
-  strikeThrough: { textDecorationLine: 'line-through', color: '#A89685' },
-  outOfStockTag: { backgroundColor: '#C62828', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 2, marginLeft: 6 },
-  outOfStockTagText: { color: '#FFFFFF', fontSize: 8, fontWeight: '800' },
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -774,12 +516,10 @@ const styles = StyleSheet.create({
   },
   totalLabel: { fontSize: 13, fontWeight: '800', color: '#2B1E1A' },
   totalValue: { fontSize: 15, fontWeight: '800', color: '#D2691E' },
-  adjustedTotalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  adjustedTotalLabel: { fontSize: 12, fontWeight: '700', color: '#5C4033' },
-  adjustedTotalValue: { fontSize: 13, fontWeight: '800', color: '#2E7D32' },
+  stockActionBtn: { marginTop: 14, height: 42, borderRadius: 8, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5 },
+  stockActionBtnOut: { backgroundColor: '#FFFFFF', borderColor: '#C62828' },
+  stockActionBtnIn: { backgroundColor: '#137A63', borderColor: '#137A63' },
+  stockActionText: { fontSize: 12.5, fontWeight: '800' },
+  stockActionTextOut: { color: '#C62828' },
+  stockActionTextIn: { color: '#FFFFFF' },
 });
