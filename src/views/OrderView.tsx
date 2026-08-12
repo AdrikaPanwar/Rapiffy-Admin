@@ -341,8 +341,14 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
           {isExpanded && (
             <View style={styles.cardBody}>
               <DetailRow label="Order ID" value={String(item.orderId)} />
+              <DetailRow label="Order number" value={item.orderNumber || '-'} />
+              <DetailRow label="Customer name" value={item.customerName || '-'} />
               <DetailRow label="Customer phone" value={item.customerPhone || '-'} />
               <DetailRow label="Total items" value={String(item.totalItems)} />
+
+              <View style={styles.divider} />
+
+              <DetailRow label="Status" value={prettyStatus(item.status)} />
               <DetailRow label="Delivery type" value={item.deliveryType || '-'} />
               <DetailRow label="Placed on" value={formatDate(item.createdAt)} />
 
