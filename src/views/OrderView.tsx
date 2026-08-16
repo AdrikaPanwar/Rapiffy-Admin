@@ -312,28 +312,28 @@ const STATUS_RANK: Record<string, number> = {
 
 const ACTION_COPY: Record<StatusAction, { title: string; text: string; button: string; hint: string }> = {
   confirm: {
-    title: 'Mark as ordered?',
-    text: 'This confirms the order. The customer app will show Ordered.',
-    button: 'Mark ordered',
-    hint: 'Tap Ordered to confirm. The customer app will show this step.',
+    title: 'Confirm this order?',
+    text: 'This confirms the order and deducts stock. The customer app will show Ordered.',
+    button: 'Confirm order',
+    hint: 'You confirm the order here. This deducts stock. The customer app will show Ordered.',
   },
   ready: {
     title: 'Mark as ready?',
-    text: 'The customer app will show this order as ready.',
+    text: 'You are marking this packed and ready. The customer app will show Ready.',
     button: 'Mark ready',
-    hint: 'Tap Ready after packing. The customer app will show this step.',
+    hint: 'You mark Ready after packing. The customer app will show this step.',
   },
   'out-for-delivery': {
     title: 'Mark out for delivery?',
-    text: 'The customer app will show this order as out for delivery.',
+    text: 'You are sending this order out. The customer app will show Out for Delivery.',
     button: 'Mark out for delivery',
-    hint: 'Tap Out for Delivery when the order leaves the shop. The customer app will show this step.',
+    hint: 'You mark Out for Delivery when it leaves the shop. The customer app will show this step.',
   },
   delivered: {
     title: 'Mark as delivered?',
-    text: 'The customer app will show this order as delivered.',
+    text: 'You are completing this order. The customer app will show Delivered.',
     button: 'Mark delivered',
-    hint: 'Tap Delivered when the customer has received the order. The customer app will show this step.',
+    hint: 'You mark Delivered when the customer has received it. The customer app will show this step.',
   },
 };
 
@@ -372,6 +372,9 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
   return (
     <View style={[styles.trackBox, compact && styles.trackBoxCompact]}>
       <Text style={styles.trackTitle}>ORDER STATUS</Text>
+      {compact ? null : (
+        <Text style={styles.trackOwnerHint}>You mark each step here. The customer app shows the same status.</Text>
+      )}
       <View style={styles.trackRow}>
         {TRACK_STEPS.map((step, index) => {
           const stepRank = index + 1;
@@ -803,6 +806,13 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
 
         const detail = normalizeDetail(payload, order);
         applyDetailToList(order.orderId, detail);
+        if (action === 'confirm') {
+          void fetchOrderExtras({
+            ...order,
+            status: detail.status,
+            orderNumber: detail.orderNumber || order.orderNumber,
+          });
+        }
       } catch {
         Alert.alert('Network error', 'Please check your connection and try again.');
       } finally {
@@ -813,7 +823,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         });
       }
     },
-    [applyDetailToList, resolveToken],
+    [applyDetailToList, fetchOrderExtras, resolveToken],
   );
 
   const confirmStatusUpdate = useCallback((order: OrderSummary, action: StatusAction) => {
@@ -957,6 +967,21 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                 busy={isStatusUpdating}
                 onAdvance={(action) => confirmStatusUpdate(item, action)}
               />
+
+              {!pendingAction && getNextAction(currentStatus) === 'confirm' ? (
+                <TouchableOpacity
+                  style={styles.shopActionBtn}
+                  onPress={() => confirmStatusUpdate(item, 'confirm')}
+                  activeOpacity={0.85}
+                  disabled={isStatusUpdating}
+                >
+                  {isStatusUpdating ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.shopActionText}>Confirm order</Text>
+                  )}
+                </TouchableOpacity>
+              ) : null}
 
               {pendingAction ? (
                 <View style={styles.confirmBox}>
@@ -1413,7 +1438,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#5C4033',
     letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+  trackOwnerHint: {
+    fontSize: 11,
+    color: '#8A7A6A',
+    fontWeight: '600',
     marginBottom: 8,
+    lineHeight: 15,
   },
   trackRow: {
     flexDirection: 'row',
@@ -1564,5 +1596,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: '#FFFFFF',
+  },
+  shopActionBtn: {
+    marginTop: 10,
+    height: 42,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#D2691E',
+  },
+  shopActionText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
   },
 });
