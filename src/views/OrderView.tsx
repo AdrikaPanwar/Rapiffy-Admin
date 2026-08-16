@@ -9,10 +9,14 @@ import {
   ActivityIndicator,
   RefreshControl,
   StatusBar,
+  Image,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { File, Paths } from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { BottomNavBar } from '../components/BottomNavBar';
 
 const BASE_URL = 'https://rapiffy-backend-1.onrender.com';
@@ -44,6 +48,60 @@ export interface OrderSummary {
   status: string;
   deliveryType: string;
   createdAt: string;
+}
+
+export interface OrderLineItem {
+  orderItemId: number;
+  shopProductId: number | null;
+  productName: string;
+  brand: string;
+  unit: string;
+  unitValue: string;
+  imageUrl: string | null;
+  mrp: number;
+  sellingPrice: number;
+  quantity: number;
+  gstSlab: string;
+  gstAmount: number;
+  lineTotal: number;
+}
+
+export interface OrderDetail {
+  orderId: number;
+  orderNumber: string;
+  invoiceId: string;
+  customerPhone: string;
+  customerName: string;
+  shopName: string;
+  items: OrderLineItem[];
+  subtotal: number;
+  totalGst: number;
+  deliveryCharge: number;
+  totalAmount: number;
+  deliveryType: string;
+  deliveryAddress: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InvoiceInfo {
+  invoiceId: string;
+  orderNumber: string;
+  invoiceDate: string;
+  shopName: string;
+  shopAddress: string;
+  shopGstNumber: string;
+  shopPhone: string;
+  customerName: string;
+  customerPhone: string;
+  deliveryAddress: string;
+  deliveryType: string;
+  items: OrderLineItem[];
+  subtotal: number;
+  totalGst: number;
+  deliveryCharge: number;
+  totalAmount: number;
 }
 
 export interface OrderViewProps {
@@ -114,6 +172,99 @@ const normalizeSummary = (raw: any): OrderSummary | null => {
   };
 };
 
+const parseJson = (text: string): any => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
+
+const unwrapObject = (payload: any): any => {
+  if (payload && typeof payload === 'object' && !Array.isArray(payload) && payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data)) {
+    return payload.data;
+  }
+  return payload;
+};
+
+const readMessage = (payload: any, fallback: string): string => {
+  if (payload && typeof payload === 'object') {
+    if (typeof payload.message === 'string' && payload.message.trim()) return payload.message;
+    if (typeof payload.error === 'string' && payload.error.trim()) return payload.error;
+  }
+  return fallback;
+};
+
+const normalizeLineItem = (raw: any): OrderLineItem | null => {
+  if (!raw || typeof raw !== 'object') return null;
+  const orderItemId = toNumber(raw.orderItemId, NaN);
+  if (isNaN(orderItemId)) return null;
+  return {
+    orderItemId,
+    shopProductId: raw.shopProductId == null ? null : toNumber(raw.shopProductId),
+    productName: String(raw.productName || 'Item'),
+    brand: String(raw.brand || ''),
+    unit: String(raw.unit || ''),
+    unitValue: String(raw.unitValue || ''),
+    imageUrl: typeof raw.imageUrl === 'string' ? raw.imageUrl : null,
+    mrp: toNumber(raw.mrp),
+    sellingPrice: toNumber(raw.sellingPrice),
+    quantity: toNumber(raw.quantity),
+    gstSlab: String(raw.gstSlab || ''),
+    gstAmount: toNumber(raw.gstAmount),
+    lineTotal: toNumber(raw.lineTotal),
+  };
+};
+
+const normalizeDetail = (raw: any, fallback: OrderSummary): OrderDetail => {
+  const source = unwrapObject(raw) || {};
+  const itemsSource = Array.isArray(source.items) ? source.items : [];
+  return {
+    orderId: toNumber(source.orderId, fallback.orderId),
+    orderNumber: String(source.orderNumber || fallback.orderNumber || ''),
+    invoiceId: String(source.invoiceId || ''),
+    customerPhone: String(source.customerPhone || fallback.customerPhone || ''),
+    customerName: String(source.customerName || fallback.customerName || ''),
+    shopName: String(source.shopName || ''),
+    items: itemsSource.map(normalizeLineItem).filter((item: OrderLineItem | null): item is OrderLineItem => item !== null),
+    subtotal: toNumber(source.subtotal, fallback.subtotal),
+    totalGst: toNumber(source.totalGst, fallback.totalGst),
+    deliveryCharge: toNumber(source.deliveryCharge, fallback.deliveryCharge),
+    totalAmount: toNumber(source.totalAmount, fallback.totalAmount),
+    deliveryType: String(source.deliveryType || fallback.deliveryType || ''),
+    deliveryAddress: String(source.deliveryAddress || ''),
+    status: String(source.status || fallback.status || ''),
+    createdAt: String(source.createdAt || fallback.createdAt || ''),
+    updatedAt: String(source.updatedAt || ''),
+  };
+};
+
+const normalizeInvoice = (raw: any): InvoiceInfo | null => {
+  const source = unwrapObject(raw);
+  if (!source || typeof source !== 'object') return null;
+  const itemsSource = Array.isArray(source.items) ? source.items : [];
+  return {
+    invoiceId: String(source.invoiceId || ''),
+    orderNumber: String(source.orderNumber || ''),
+    invoiceDate: String(source.invoiceDate || ''),
+    shopName: String(source.shopName || ''),
+    shopAddress: String(source.shopAddress || ''),
+    shopGstNumber: String(source.shopGstNumber || ''),
+    shopPhone: String(source.shopPhone || ''),
+    customerName: String(source.customerName || ''),
+    customerPhone: String(source.customerPhone || ''),
+    deliveryAddress: String(source.deliveryAddress || ''),
+    deliveryType: String(source.deliveryType || ''),
+    items: itemsSource.map(normalizeLineItem).filter((item: OrderLineItem | null): item is OrderLineItem => item !== null),
+    subtotal: toNumber(source.subtotal),
+    totalGst: toNumber(source.totalGst),
+    deliveryCharge: toNumber(source.deliveryCharge),
+    totalAmount: toNumber(source.totalAmount),
+  };
+};
+
+const itemStockKey = (orderId: number, orderItemId: number): string => `${orderId}:${orderItemId}`;
+
 const ChevronIcon = ({ open }: { open: boolean }) => (
   <Svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5C4033" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
     {open ? <Path d="m18 15-6-6-6 6" /> : <Path d="m6 9 6 6 6-6" />}
@@ -146,6 +297,13 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
   const [selectedStatus, setSelectedStatus] = useState<OrderStatusFilter>('ALL');
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [outOfStockIds, setOutOfStockIds] = useState<Set<number>>(new Set());
+  const [outOfStockItemKeys, setOutOfStockItemKeys] = useState<Set<string>>(new Set());
+  const [orderDetails, setOrderDetails] = useState<Record<number, OrderDetail>>({});
+  const [invoices, setInvoices] = useState<Record<number, InvoiceInfo>>({});
+  const [detailLoadingIds, setDetailLoadingIds] = useState<Set<number>>(new Set());
+  const [detailErrorById, setDetailErrorById] = useState<Record<number, string>>({});
+  const [invoiceErrorById, setInvoiceErrorById] = useState<Record<number, string>>({});
+  const [pdfLoadingIds, setPdfLoadingIds] = useState<Set<number>>(new Set());
 
   const resolveToken = useCallback(async (): Promise<string | null> => {
     const fromProp = authToken && authToken.trim() !== '' ? authToken.trim() : '';
@@ -260,17 +418,165 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
     setExpandedIds(new Set());
   }, []);
 
-  const handleToggleExpand = useCallback((orderId: number) => {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(orderId)) {
-        next.delete(orderId);
-      } else {
-        next.add(orderId);
+  const fetchOrderExtras = useCallback(
+    async (order: OrderSummary) => {
+      const token = await resolveToken();
+      if (!token) {
+        setDetailErrorById((prev) => ({ ...prev, [order.orderId]: 'You are not logged in.' }));
+        return;
       }
-      return next;
-    });
-  }, []);
+
+      setDetailLoadingIds((prev) => {
+        const next = new Set(prev);
+        next.add(order.orderId);
+        return next;
+      });
+      setDetailErrorById((prev) => {
+        const next = { ...prev };
+        delete next[order.orderId];
+        return next;
+      });
+      setInvoiceErrorById((prev) => {
+        const next = { ...prev };
+        delete next[order.orderId];
+        return next;
+      });
+
+      const headers = {
+        accept: '*/*',
+        Authorization: `Bearer ${token}`,
+      };
+
+      try {
+        const [detailResponse, invoiceResponse] = await Promise.all([
+          fetch(`${BASE_URL}/v1/admin/orders/${order.orderId}`, { method: 'GET', headers }),
+          fetch(`${BASE_URL}/v1/admin/orders/${order.orderId}/invoice`, { method: 'GET', headers }),
+        ]);
+
+        const detailText = await detailResponse.text();
+        const detailPayload = parseJson(detailText);
+        if (detailResponse.ok) {
+          setOrderDetails((prev) => ({
+            ...prev,
+            [order.orderId]: normalizeDetail(detailPayload, order),
+          }));
+        } else {
+          setDetailErrorById((prev) => ({
+            ...prev,
+            [order.orderId]: readMessage(detailPayload, `Could not load items (error ${detailResponse.status}).`),
+          }));
+        }
+
+        const invoiceText = await invoiceResponse.text();
+        const invoicePayload = parseJson(invoiceText);
+        if (invoiceResponse.ok) {
+          const invoice = normalizeInvoice(invoicePayload);
+          if (invoice) {
+            setInvoices((prev) => ({ ...prev, [order.orderId]: invoice }));
+          } else {
+            setInvoiceErrorById((prev) => ({
+              ...prev,
+              [order.orderId]: 'Invoice data was empty.',
+            }));
+          }
+        } else {
+          setInvoiceErrorById((prev) => ({
+            ...prev,
+            [order.orderId]: readMessage(
+              invoicePayload,
+              'Invoice is not ready yet. Confirm the order first.',
+            ),
+          }));
+        }
+      } catch {
+        setDetailErrorById((prev) => ({
+          ...prev,
+          [order.orderId]: 'Network error while loading items.',
+        }));
+      } finally {
+        setDetailLoadingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(order.orderId);
+          return next;
+        });
+      }
+    },
+    [resolveToken],
+  );
+
+  const handleToggleExpand = useCallback(
+    (order: OrderSummary) => {
+      const isOpen = expandedIds.has(order.orderId);
+      setExpandedIds((prev) => {
+        const next = new Set(prev);
+        if (isOpen) {
+          next.delete(order.orderId);
+        } else {
+          next.add(order.orderId);
+        }
+        return next;
+      });
+      if (!isOpen && !orderDetails[order.orderId] && !detailLoadingIds.has(order.orderId)) {
+        fetchOrderExtras(order);
+      }
+    },
+    [detailLoadingIds, expandedIds, fetchOrderExtras, orderDetails],
+  );
+
+  const downloadInvoicePdf = useCallback(
+    async (order: OrderSummary) => {
+      const token = await resolveToken();
+      if (!token) {
+        Alert.alert('Not logged in', 'Please sign in again to download the invoice.');
+        return;
+      }
+
+      setPdfLoadingIds((prev) => {
+        const next = new Set(prev);
+        next.add(order.orderId);
+        return next;
+      });
+
+      try {
+        const destination = new File(Paths.cache, `invoice-${order.orderId}.pdf`);
+        const downloaded = await File.downloadFileAsync(
+          `${BASE_URL}/v1/admin/orders/${order.orderId}/invoice/pdf`,
+          destination,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              accept: 'application/pdf',
+            },
+            idempotent: true,
+          },
+        );
+
+        const canShare = await Sharing.isAvailableAsync();
+        if (!canShare) {
+          Alert.alert('Invoice downloaded', 'Sharing is not available on this device.');
+          return;
+        }
+
+        await Sharing.shareAsync(downloaded.uri, {
+          mimeType: 'application/pdf',
+          UTI: 'com.adobe.pdf',
+          dialogTitle: 'Share invoice PDF',
+        });
+      } catch {
+        Alert.alert(
+          'Could not download PDF',
+          'Invoice may not be ready yet. Confirm the order first, then try again.',
+        );
+      } finally {
+        setPdfLoadingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(order.orderId);
+          return next;
+        });
+      }
+    },
+    [resolveToken],
+  );
 
   const toggleOutOfStock = useCallback((orderId: number) => {
     setOutOfStockIds((prev) => {
@@ -284,11 +590,33 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
     });
   }, []);
 
+  const toggleItemOutOfStock = useCallback((orderId: number, orderItemId: number) => {
+    const key = itemStockKey(orderId, orderItemId);
+    setOutOfStockItemKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
+
   const renderOrderCard = useCallback(
     ({ item }: { item: OrderSummary }) => {
       const isExpanded = expandedIds.has(item.orderId);
       const isSelected = !outOfStockIds.has(item.orderId);
       const statusColor = getStatusColor(item.status);
+      const detail = orderDetails[item.orderId];
+      const invoice = invoices[item.orderId];
+      const items = (detail && Array.isArray(detail.items) && detail.items.length > 0)
+        ? detail.items
+        : (invoice && Array.isArray(invoice.items) ? invoice.items : []);
+      const isDetailLoading = detailLoadingIds.has(item.orderId);
+      const detailError = detailErrorById[item.orderId];
+      const invoiceError = invoiceErrorById[item.orderId];
+      const isPdfLoading = pdfLoadingIds.has(item.orderId);
 
       return (
         <View style={[styles.orderCard, !isSelected && styles.orderCardMuted]}>
@@ -304,7 +632,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
 
             <TouchableOpacity
               style={styles.headerTapZone}
-              onPress={() => handleToggleExpand(item.orderId)}
+              onPress={() => handleToggleExpand(item)}
               activeOpacity={0.8}
             >
               <View style={styles.headerTextBlock}>
@@ -341,27 +669,142 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
           {isExpanded && (
             <View style={styles.cardBody}>
               <DetailRow label="Order ID" value={String(item.orderId)} />
-              <DetailRow label="Order number" value={item.orderNumber || '-'} />
-              <DetailRow label="Customer name" value={item.customerName || '-'} />
-              <DetailRow label="Customer phone" value={item.customerPhone || '-'} />
-              <DetailRow label="Total items" value={String(item.totalItems)} />
+              <DetailRow label="Order number" value={detail?.orderNumber || item.orderNumber || '-'} />
+              <DetailRow label="Customer name" value={detail?.customerName || item.customerName || '-'} />
+              <DetailRow label="Customer phone" value={detail?.customerPhone || item.customerPhone || '-'} />
+              <DetailRow label="Total items" value={String(detail?.items.length ?? item.totalItems)} />
 
               <View style={styles.divider} />
 
-              <DetailRow label="Status" value={prettyStatus(item.status)} />
-              <DetailRow label="Delivery type" value={item.deliveryType || '-'} />
-              <DetailRow label="Placed on" value={formatDate(item.createdAt)} />
+              <DetailRow label="Status" value={prettyStatus(detail?.status || item.status)} />
+              <DetailRow label="Delivery type" value={detail?.deliveryType || item.deliveryType || '-'} />
+              <DetailRow label="Delivery address" value={detail?.deliveryAddress || '-'} />
+              <DetailRow label="Shop name" value={detail?.shopName || '-'} />
+              <DetailRow label="Placed on" value={formatDate(detail?.createdAt || item.createdAt)} />
 
               <View style={styles.divider} />
 
-              <DetailRow label="Subtotal" value={formatMoney(item.subtotal)} />
-              <DetailRow label="GST" value={formatMoney(item.totalGst)} />
-              <DetailRow label="Delivery charge" value={formatMoney(item.deliveryCharge)} />
+              <Text style={styles.sectionTitle}>Items</Text>
+              <Text style={styles.sectionHint}>Un-select any item that has gone out of stock.</Text>
+              {isDetailLoading && items.length === 0 ? (
+                <View style={styles.inlineLoading}>
+                  <ActivityIndicator size="small" color="#D2691E" />
+                  <Text style={[styles.centerStateText, { marginTop: 0, marginLeft: 8 }]}>Loading items...</Text>
+                </View>
+              ) : detailError && items.length === 0 ? (
+                <View style={styles.inlineError}>
+                  <Text style={styles.itemErrorText}>{detailError}</Text>
+                  <TouchableOpacity style={styles.retryBtnSmall} onPress={() => fetchOrderExtras(item)} activeOpacity={0.85}>
+                    <Text style={styles.retryBtnText}>Retry items</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : items.length === 0 ? (
+                <Text style={styles.emptyItemsText}>No items found for this order.</Text>
+              ) : (
+                items.map((line) => {
+                  const isItemSelected = !outOfStockItemKeys.has(itemStockKey(item.orderId, line.orderItemId));
+                  const unitLabel = [line.unitValue, line.unit].filter(Boolean).join(' ');
+                  return (
+                    <View key={`item_${item.orderId}_${line.orderItemId}`} style={[styles.itemCard, !isItemSelected && styles.itemCardMuted]}>
+                      <TouchableOpacity
+                        style={[styles.itemCheckbox, isItemSelected ? styles.checkboxOn : styles.checkboxOff]}
+                        onPress={() => toggleItemOutOfStock(item.orderId, line.orderItemId)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        activeOpacity={0.7}
+                      >
+                        {isItemSelected ? <CheckIcon /> : null}
+                      </TouchableOpacity>
+                      {line.imageUrl && line.imageUrl.startsWith('http') ? (
+                        <Image source={{ uri: line.imageUrl }} style={styles.itemImage} />
+                      ) : (
+                        <View style={styles.itemImageFallback}>
+                          <Text style={styles.itemImageFallbackText}>
+                            {line.productName ? line.productName.charAt(0).toUpperCase() : '?'}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.itemTextBlock}>
+                        <View style={styles.itemTitleRow}>
+                          <Text style={[styles.itemName, !isItemSelected && styles.strikeThrough]} numberOfLines={2}>
+                            {line.productName}
+                          </Text>
+                          {!isItemSelected && (
+                            <View style={styles.outOfStockTag}>
+                              <Text style={styles.outOfStockTagText}>OUT OF STOCK</Text>
+                            </View>
+                          )}
+                        </View>
+                        {!!line.brand && <Text style={styles.itemMeta}>{line.brand}</Text>}
+                        <Text style={styles.itemMeta}>
+                          Qty {line.quantity}{unitLabel ? ` · ${unitLabel}` : ''}
+                        </Text>
+                        <Text style={styles.itemMeta}>
+                          Price {formatMoney(line.sellingPrice)} · MRP {formatMoney(line.mrp)}
+                        </Text>
+                        <Text style={styles.itemMeta}>
+                          GST {formatMoney(line.gstAmount)}{line.gstSlab ? ` (${line.gstSlab})` : ''}
+                        </Text>
+                      </View>
+                      <Text style={[styles.itemPrice, !isItemSelected && styles.strikeThrough]}>{formatMoney(line.lineTotal)}</Text>
+                    </View>
+                  );
+                })
+              )}
+
+              <View style={styles.divider} />
+
+              <DetailRow label="Subtotal" value={formatMoney(detail?.subtotal ?? item.subtotal)} />
+              <DetailRow label="GST" value={formatMoney(detail?.totalGst ?? item.totalGst)} />
+              <DetailRow label="Delivery charge" value={formatMoney(detail?.deliveryCharge ?? item.deliveryCharge)} />
 
               <View style={styles.totalRow}>
                 <Text style={styles.totalLabel}>Total amount</Text>
-                <Text style={styles.totalValue}>{formatMoney(item.totalAmount)}</Text>
+                <Text style={styles.totalValue}>{formatMoney(detail?.totalAmount ?? item.totalAmount)}</Text>
               </View>
+
+              <View style={styles.divider} />
+
+              <Text style={styles.sectionTitle}>Invoice</Text>
+              {invoice ? (
+                <>
+                  <DetailRow label="Invoice ID" value={invoice.invoiceId || '-'} />
+                  <DetailRow label="Order number" value={invoice.orderNumber || '-'} />
+                  <DetailRow label="Invoice date" value={formatDate(invoice.invoiceDate)} />
+                  <DetailRow label="Shop name" value={invoice.shopName || '-'} />
+                  <DetailRow label="Shop address" value={invoice.shopAddress || '-'} />
+                  <DetailRow label="Shop GST number" value={invoice.shopGstNumber || '-'} />
+                  <DetailRow label="Shop phone" value={invoice.shopPhone || '-'} />
+                  <DetailRow label="Customer name" value={invoice.customerName || '-'} />
+                  <DetailRow label="Customer phone" value={invoice.customerPhone || '-'} />
+                  <DetailRow label="Delivery address" value={invoice.deliveryAddress || '-'} />
+                  <DetailRow label="Delivery type" value={invoice.deliveryType || '-'} />
+                  <View style={styles.divider} />
+                  <DetailRow label="Subtotal" value={formatMoney(invoice.subtotal)} />
+                  <DetailRow label="GST" value={formatMoney(invoice.totalGst)} />
+                  <DetailRow label="Delivery charge" value={formatMoney(invoice.deliveryCharge)} />
+                  <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>Total amount</Text>
+                    <Text style={styles.totalValue}>{formatMoney(invoice.totalAmount)}</Text>
+                  </View>
+                </>
+              ) : (
+                <Text style={styles.emptyItemsText}>
+                  {invoiceError || (isDetailLoading ? 'Loading invoice...' : 'Invoice is not ready yet.')}
+                </Text>
+              )}
+
+              <TouchableOpacity
+                style={styles.pdfBtn}
+                onPress={() => downloadInvoicePdf(item)}
+                activeOpacity={0.85}
+                disabled={isPdfLoading}
+              >
+                {isPdfLoading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.pdfBtnText}>Download invoice PDF</Text>
+                )}
+              </TouchableOpacity>
 
               <TouchableOpacity
                 style={[styles.stockActionBtn, isSelected ? styles.stockActionBtnOut : styles.stockActionBtnIn]}
@@ -377,7 +820,22 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         </View>
       );
     },
-    [expandedIds, handleToggleExpand, outOfStockIds, toggleOutOfStock],
+    [
+      detailErrorById,
+      detailLoadingIds,
+      downloadInvoicePdf,
+      expandedIds,
+      fetchOrderExtras,
+      handleToggleExpand,
+      invoiceErrorById,
+      invoices,
+      orderDetails,
+      outOfStockIds,
+      outOfStockItemKeys,
+      pdfLoadingIds,
+      toggleItemOutOfStock,
+      toggleOutOfStock,
+    ],
   );
 
   const keyExtractor = useCallback(
@@ -453,7 +911,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
             data={orders}
             keyExtractor={keyExtractor}
             renderItem={renderOrderCard}
-            extraData={{ expandedIds, outOfStockIds }}
+            extraData={{ expandedIds, outOfStockIds, outOfStockItemKeys, orderDetails, invoices, detailLoadingIds, pdfLoadingIds }}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
             refreshControl={
@@ -561,4 +1019,57 @@ const styles = StyleSheet.create({
   stockActionText: { fontSize: 12.5, fontWeight: '800' },
   stockActionTextOut: { color: '#C62828' },
   stockActionTextIn: { color: '#FFFFFF' },
+  sectionTitle: { fontSize: 13, fontWeight: '800', color: '#2B1E1A', marginBottom: 2 },
+  sectionHint: { fontSize: 11, color: '#A89685', fontWeight: '600', marginBottom: 10 },
+  inlineLoading: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
+  inlineError: { alignItems: 'flex-start', paddingVertical: 8 },
+  itemErrorText: { fontSize: 12, color: '#C62828', fontWeight: '700' },
+  retryBtnSmall: { backgroundColor: '#D2691E', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, marginTop: 8 },
+  emptyItemsText: { fontSize: 12, color: '#A89685', fontWeight: '600', paddingVertical: 8 },
+  itemCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FFFBF7',
+    borderWidth: 1,
+    borderColor: '#F0E2D3',
+    borderRadius: 10,
+    padding: 8,
+    marginBottom: 8,
+  },
+  itemCardMuted: { opacity: 0.55 },
+  itemCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+    marginTop: 2,
+    borderWidth: 1.5,
+  },
+  itemImage: { width: 42, height: 42, borderRadius: 8, backgroundColor: '#F5ECE2', marginRight: 8 },
+  itemImageFallback: {
+    width: 42,
+    height: 42,
+    borderRadius: 8,
+    backgroundColor: '#F5ECE2',
+    marginRight: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itemImageFallbackText: { fontSize: 14, fontWeight: '800', color: '#5C4033' },
+  itemTextBlock: { flex: 1, paddingRight: 6 },
+  itemTitleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
+  itemName: { fontSize: 12.5, fontWeight: '800', color: '#2B1E1A', flexShrink: 1 },
+  itemMeta: { fontSize: 11, color: '#8A7A6A', fontWeight: '600', marginTop: 1 },
+  itemPrice: { fontSize: 12.5, fontWeight: '800', color: '#2B1E1A', marginTop: 2 },
+  pdfBtn: {
+    marginTop: 12,
+    height: 42,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2B1E1A',
+  },
+  pdfBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
 });
