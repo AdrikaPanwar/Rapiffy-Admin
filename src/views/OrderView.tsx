@@ -1363,7 +1363,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
               <View style={styles.divider} />
 
               <Text style={styles.sectionTitle}>Invoice</Text>
-              <Text style={styles.sectionHint}>Same layout as the customer invoice: shops grouped, then grand total.</Text>
+              <Text style={styles.sectionHint}>Shops grouped, then grand total.</Text>
               {invoice ? (
                 <>
                   <DetailRow label="Order number" value={invoice.orderNumber || '-'} />
