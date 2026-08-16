@@ -290,7 +290,7 @@ const PinIcon = () => (
   </Svg>
 );
 
-type StatusAction = 'ready' | 'out-for-delivery';
+type StatusAction = 'confirm' | 'ready' | 'out-for-delivery' | 'delivered';
 
 const TRACK_STEPS = [
   { key: 'CONFIRMED', label: 'Ordered' },
@@ -310,6 +310,33 @@ const STATUS_RANK: Record<string, number> = {
   REJECTED: -1,
 };
 
+const ACTION_COPY: Record<StatusAction, { title: string; text: string; button: string; hint: string }> = {
+  confirm: {
+    title: 'Mark as ordered?',
+    text: 'This confirms the order. The customer app will show Ordered.',
+    button: 'Mark ordered',
+    hint: 'Tap Ordered to confirm. The customer app will show this step.',
+  },
+  ready: {
+    title: 'Mark as ready?',
+    text: 'The customer app will show this order as ready.',
+    button: 'Mark ready',
+    hint: 'Tap Ready after packing. The customer app will show this step.',
+  },
+  'out-for-delivery': {
+    title: 'Mark out for delivery?',
+    text: 'The customer app will show this order as out for delivery.',
+    button: 'Mark out for delivery',
+    hint: 'Tap Out for Delivery when the order leaves the shop. The customer app will show this step.',
+  },
+  delivered: {
+    title: 'Mark as delivered?',
+    text: 'The customer app will show this order as delivered.',
+    button: 'Mark delivered',
+    hint: 'Tap Delivered when the customer has received the order. The customer app will show this step.',
+  },
+};
+
 const getStatusRank = (status: string): number => {
   const key = String(status || '').toUpperCase();
   return STATUS_RANK[key] ?? 0;
@@ -317,10 +344,18 @@ const getStatusRank = (status: string): number => {
 
 const getStepAction = (status: string, stepKey: string): StatusAction | null => {
   const current = String(status || '').toUpperCase();
+  if (stepKey === 'CONFIRMED' && current === 'PENDING') return 'confirm';
   if (stepKey === 'READY' && current === 'CONFIRMED') return 'ready';
   if (stepKey === 'OUT_FOR_DELIVERY' && current === 'READY') return 'out-for-delivery';
+  if (stepKey === 'DELIVERED' && current === 'OUT_FOR_DELIVERY') return 'delivered';
   return null;
 };
+
+const getNextAction = (status: string): StatusAction | null =>
+  getStepAction(status, 'CONFIRMED')
+  || getStepAction(status, 'READY')
+  || getStepAction(status, 'OUT_FOR_DELIVERY')
+  || getStepAction(status, 'DELIVERED');
 
 interface OrderStatusTrackerProps {
   status: string;
@@ -332,7 +367,7 @@ interface OrderStatusTrackerProps {
 const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }: OrderStatusTrackerProps) => {
   const rank = getStatusRank(status);
   const blocked = rank < 0;
-  const nextAction = getStepAction(status, 'READY') || getStepAction(status, 'OUT_FOR_DELIVERY');
+  const nextAction = getNextAction(status);
 
   return (
     <View style={[styles.trackBox, compact && styles.trackBoxCompact]}>
@@ -391,16 +426,14 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
       </View>
       {blocked ? (
         <Text style={styles.trackHint}>This order is {prettyStatus(status).toLowerCase()} and cannot be moved forward.</Text>
-      ) : compact ? null : nextAction === 'ready' ? (
-        <Text style={styles.trackHint}>Tap Ready after packing. Your API updates the customer app.</Text>
-      ) : nextAction === 'out-for-delivery' ? (
-        <Text style={styles.trackHint}>Tap Out for Delivery when the order leaves the shop. Your API updates the customer app.</Text>
+      ) : compact ? null : nextAction ? (
+        <Text style={styles.trackHint}>{ACTION_COPY[nextAction].hint}</Text>
       ) : rank >= 4 ? (
-        <Text style={styles.trackHint}>This order is delivered.</Text>
-      ) : rank >= 3 ? (
-        <Text style={styles.trackHint}>Out for delivery. The customer app already shows this step.</Text>
+        <Text style={styles.trackHint}>This order is delivered. The customer app already shows this step.</Text>
+      ) : String(status || '').toUpperCase() === 'PAYMENT_PENDING' ? (
+        <Text style={styles.trackHint}>Payment is still pending. You can mark Ordered after payment.</Text>
       ) : (
-        <Text style={styles.trackHint}>Confirm the order first. Then you can tap the next step.</Text>
+        <Text style={styles.trackHint}>Tap the next orange step to update the customer app.</Text>
       )}
     </View>
   );
@@ -927,14 +960,8 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
 
               {pendingAction ? (
                 <View style={styles.confirmBox}>
-                  <Text style={styles.confirmTitle}>
-                    {pendingAction === 'ready' ? 'Mark as ready?' : 'Mark out for delivery?'}
-                  </Text>
-                  <Text style={styles.confirmText}>
-                    {pendingAction === 'ready'
-                      ? 'The customer app will show this order as ready.'
-                      : 'The customer app will show this order as out for delivery.'}
-                  </Text>
+                  <Text style={styles.confirmTitle}>{ACTION_COPY[pendingAction].title}</Text>
+                  <Text style={styles.confirmText}>{ACTION_COPY[pendingAction].text}</Text>
                   <View style={styles.confirmRow}>
                     <TouchableOpacity
                       style={styles.confirmCancelBtn}
@@ -952,9 +979,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                       {isStatusUpdating ? (
                         <ActivityIndicator size="small" color="#FFFFFF" />
                       ) : (
-                        <Text style={styles.confirmGoText}>
-                          {pendingAction === 'ready' ? 'Mark ready' : 'Mark out for delivery'}
-                        </Text>
+                        <Text style={styles.confirmGoText}>{ACTION_COPY[pendingAction].button}</Text>
                       )}
                     </TouchableOpacity>
                   </View>
