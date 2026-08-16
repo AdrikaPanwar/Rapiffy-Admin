@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -352,6 +352,17 @@ const getStatusRank = (status: string): number => {
   return STATUS_RANK[key] ?? 0;
 };
 
+const preferStatus = (current: string, incoming: string): string => {
+  const cur = String(current || '').toUpperCase();
+  const next = String(incoming || '').toUpperCase();
+  if (!next) return cur;
+  if (!cur) return next;
+  if (next === 'CANCELLED' || next === 'REJECTED' || cur === 'CANCELLED' || cur === 'REJECTED') {
+    return next;
+  }
+  return getStatusRank(next) >= getStatusRank(cur) ? next : cur;
+};
+
 const getStepAction = (status: string, stepKey: string): StatusAction | null => {
   const current = String(status || '').toUpperCase();
   if (stepKey === 'CONFIRMED' && current === 'PENDING') return 'confirm';
@@ -401,6 +412,8 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
               style={styles.trackStep}
               disabled={!action || busy}
               hitSlop={action ? { top: 8, bottom: 8, left: 4, right: 4 } : undefined}
+              accessibilityRole={action ? 'button' : 'text'}
+              accessibilityLabel={action ? `Mark ${step.label}` : step.label}
               onPress={() => {
                 if (action && onAdvance) onAdvance(action);
               }}
@@ -485,6 +498,8 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
   const [pdfLoadingIds, setPdfLoadingIds] = useState<Set<number>>(new Set());
   const [statusUpdatingIds, setStatusUpdatingIds] = useState<Set<number>>(new Set());
   const [pendingActionById, setPendingActionById] = useState<Record<number, StatusAction>>({});
+  const orderDetailsRef = useRef<Record<number, OrderDetail>>({});
+  orderDetailsRef.current = orderDetails;
 
   const resolveToken = useCallback(async (): Promise<string | null> => {
     const fromProp = authToken && authToken.trim() !== '' ? authToken.trim() : '';
@@ -573,7 +588,20 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
           .filter((item: OrderSummary | null): item is OrderSummary => item !== null);
 
         if (signal?.aborted) return;
-        setOrders(normalized);
+        setOrders((prev) => {
+          const previousById = new Map(prev.map((order) => [order.orderId, order]));
+          return normalized
+            .map((item) => {
+              const previous = previousById.get(item.orderId);
+              const knownDetail = orderDetailsRef.current[item.orderId];
+              const knownStatus = knownDetail?.status || previous?.status || '';
+              return {
+                ...item,
+                status: preferStatus(knownStatus, item.status),
+              };
+            })
+            .filter((order) => statusFilter === 'ALL' || String(order.status).toUpperCase() === statusFilter);
+        });
       } catch (error: any) {
         if (signal?.aborted || mode === 'silent') {
           return;
@@ -648,10 +676,14 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         const detailText = await detailResponse.text();
         const detailPayload = parseJson(detailText);
         if (detailResponse.ok) {
-          setOrderDetails((prev) => ({
-            ...prev,
-            [order.orderId]: normalizeDetail(detailPayload, order),
-          }));
+          setOrderDetails((prev) => {
+            const incoming = normalizeDetail(detailPayload, order);
+            const existing = prev[order.orderId];
+            if (existing) {
+              incoming.status = preferStatus(existing.status, incoming.status);
+            }
+            return { ...prev, [order.orderId]: incoming };
+          });
         } else {
           setDetailErrorById((prev) => ({
             ...prev,
@@ -786,12 +818,12 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
             deliveryCharge: detail.deliveryCharge,
             totalAmount: detail.totalAmount,
             totalItems: detail.items.length || order.totalItems,
-            status: detail.status || order.status,
+            status: preferStatus(order.status, detail.status || order.status),
             deliveryType: detail.deliveryType || order.deliveryType,
             createdAt: detail.createdAt || order.createdAt,
           };
         })
-        .filter((order) => selectedStatus === 'ALL' || order.status === selectedStatus),
+        .filter((order) => selectedStatus === 'ALL' || String(order.status).toUpperCase() === selectedStatus),
     );
   }, [selectedStatus]);
 
@@ -847,7 +879,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
           // Keep the PUT body if GET refresh fails.
         }
 
-        void fetchOrders(selectedStatus, 'silent');
+        await fetchOrders(selectedStatus, 'silent');
         if (action === 'confirm') {
           void fetchOrderExtras({
             ...order,
@@ -928,7 +960,6 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
     ({ item }: { item: OrderSummary }) => {
       const isExpanded = expandedIds.has(item.orderId);
       const isSelected = !outOfStockIds.has(item.orderId);
-      const statusColor = getStatusColor(item.status);
       const detail = orderDetails[item.orderId];
       const invoice = invoices[item.orderId];
       const items = (detail && Array.isArray(detail.items) && detail.items.length > 0)
@@ -940,6 +971,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       const isPdfLoading = pdfLoadingIds.has(item.orderId);
       const isStatusUpdating = statusUpdatingIds.has(item.orderId);
       const currentStatus = String(detail?.status || item.status || '').toUpperCase();
+      const statusColor = getStatusColor(currentStatus);
       const deliveryAddress = detail?.deliveryAddress || '';
       const pendingAction = pendingActionById[item.orderId];
 
@@ -979,7 +1011,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
               <View style={styles.headerRightBlock}>
                 <View style={[styles.statusPill, { backgroundColor: `${statusColor}1A`, borderColor: statusColor }]}>
                   <Text style={[styles.statusPillText, { color: statusColor }]} numberOfLines={1}>
-                    {prettyStatus(item.status)}
+                    {prettyStatus(currentStatus)}
                   </Text>
                 </View>
                 <Text style={styles.headerAmountText}>{formatMoney(item.totalAmount)}</Text>
@@ -1012,7 +1044,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
 
               <View style={styles.divider} />
 
-              <DetailRow label="Status" value={prettyStatus(detail?.status || item.status)} />
+              <DetailRow label="Status" value={prettyStatus(currentStatus)} />
               <DetailRow label="Delivery type" value={detail?.deliveryType || item.deliveryType || '-'} />
               <DetailRow label="Shop name" value={detail?.shopName || '-'} />
               <DetailRow label="Placed on" value={formatDate(detail?.createdAt || item.createdAt)} />
