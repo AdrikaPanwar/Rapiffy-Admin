@@ -277,6 +277,131 @@ const CheckIcon = () => (
   </Svg>
 );
 
+const TrackCheckIcon = () => (
+  <Svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="3.6" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M20 6 9 17l-5-5" />
+  </Svg>
+);
+
+const PinIcon = () => (
+  <Svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#D2691E" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+    <Path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" />
+    <Path d="M12 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />
+  </Svg>
+);
+
+type StatusAction = 'ready' | 'out-for-delivery';
+
+const TRACK_STEPS = [
+  { key: 'CONFIRMED', label: 'Ordered' },
+  { key: 'READY', label: 'Ready' },
+  { key: 'OUT_FOR_DELIVERY', label: 'Out for Delivery' },
+  { key: 'DELIVERED', label: 'Delivered' },
+] as const;
+
+const STATUS_RANK: Record<string, number> = {
+  PAYMENT_PENDING: 0,
+  PENDING: 0,
+  CONFIRMED: 1,
+  READY: 2,
+  OUT_FOR_DELIVERY: 3,
+  DELIVERED: 4,
+  CANCELLED: -1,
+  REJECTED: -1,
+};
+
+const getStatusRank = (status: string): number => {
+  const key = String(status || '').toUpperCase();
+  return STATUS_RANK[key] ?? 0;
+};
+
+const getStepAction = (status: string, stepKey: string): StatusAction | null => {
+  const current = String(status || '').toUpperCase();
+  if (stepKey === 'READY' && current === 'CONFIRMED') return 'ready';
+  if (stepKey === 'OUT_FOR_DELIVERY' && current === 'READY') return 'out-for-delivery';
+  return null;
+};
+
+interface OrderStatusTrackerProps {
+  status: string;
+  busy?: boolean;
+  compact?: boolean;
+  onAdvance?: (action: StatusAction) => void;
+}
+
+const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }: OrderStatusTrackerProps) => {
+  const rank = getStatusRank(status);
+  const blocked = rank < 0;
+  const nextAction = getStepAction(status, 'READY') || getStepAction(status, 'OUT_FOR_DELIVERY');
+
+  return (
+    <View style={[styles.trackBox, compact && styles.trackBoxCompact]}>
+      <Text style={styles.trackTitle}>ORDER STATUS</Text>
+      <View style={styles.trackRow}>
+        {TRACK_STEPS.map((step, index) => {
+          const stepRank = index + 1;
+          const done = !blocked && rank >= stepRank;
+          const action = blocked || compact ? null : getStepAction(status, step.key);
+          const isNext = Boolean(action);
+          const leftOn = index > 0 && !blocked && rank >= index;
+          const rightOn = index < TRACK_STEPS.length - 1 && !blocked && rank > stepRank;
+
+          return (
+            <View key={step.key} style={styles.trackStep}>
+              <View style={styles.trackDotRow}>
+                <View style={[styles.trackLine, index === 0 && styles.trackLineHidden, leftOn ? styles.trackLineOn : styles.trackLineOff]} />
+                <TouchableOpacity
+                  style={[
+                    styles.trackDot,
+                    done && styles.trackDotDone,
+                    isNext && styles.trackDotNext,
+                    !done && !isNext && styles.trackDotIdle,
+                  ]}
+                  disabled={!action || busy}
+                  onPress={() => {
+                    if (action && onAdvance) onAdvance(action);
+                  }}
+                  activeOpacity={action ? 0.7 : 1}
+                >
+                  {busy && isNext ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : done ? (
+                    <TrackCheckIcon />
+                  ) : null}
+                </TouchableOpacity>
+                <View style={[styles.trackLine, index === TRACK_STEPS.length - 1 && styles.trackLineHidden, rightOn ? styles.trackLineOn : styles.trackLineOff]} />
+              </View>
+              <Text
+                style={[
+                  styles.trackLabel,
+                  done && styles.trackLabelDone,
+                  isNext && styles.trackLabelNext,
+                ]}
+                numberOfLines={2}
+              >
+                {step.label}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+      {blocked ? (
+        <Text style={styles.trackHint}>This order is {prettyStatus(status).toLowerCase()} and cannot be moved forward.</Text>
+      ) : compact ? null : nextAction === 'ready' ? (
+        <Text style={styles.trackHint}>Tap Ready after packing. Your API updates the customer app.</Text>
+      ) : nextAction === 'out-for-delivery' ? (
+        <Text style={styles.trackHint}>Tap Out for Delivery when the order leaves the shop. Your API updates the customer app.</Text>
+      ) : rank >= 4 ? (
+        <Text style={styles.trackHint}>This order is delivered.</Text>
+      ) : rank >= 3 ? (
+        <Text style={styles.trackHint}>Out for delivery. The customer app already shows this step.</Text>
+      ) : (
+        <Text style={styles.trackHint}>Confirm the order first. Then you can tap the next step.</Text>
+      )}
+    </View>
+  );
+};
+
 interface DetailRowProps {
   label: string;
   value: string;
@@ -605,7 +730,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
   }, [selectedStatus]);
 
   const updateOrderStatus = useCallback(
-    async (order: OrderSummary, action: 'ready' | 'out-for-delivery') => {
+    async (order: OrderSummary, action: StatusAction) => {
       const token = await resolveToken();
       if (!token) {
         Alert.alert('Not logged in', 'Please sign in again to update this order.');
@@ -653,6 +778,20 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
     [applyDetailToList, resolveToken],
   );
 
+  const confirmStatusUpdate = useCallback((order: OrderSummary, action: StatusAction) => {
+    const isReady = action === 'ready';
+    Alert.alert(
+      isReady ? 'Mark as ready?' : 'Mark out for delivery?',
+      isReady
+        ? 'This marks the order ready. The customer app will show the next step.'
+        : 'This marks the order out for delivery. The customer app will show the next step.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: isReady ? 'Mark ready' : 'Mark out for delivery', onPress: () => void updateOrderStatus(order, action) },
+      ],
+    );
+  }, [updateOrderStatus]);
+
   const toggleOutOfStock = useCallback((orderId: number) => {
     setOutOfStockIds((prev) => {
       const next = new Set(prev);
@@ -694,8 +833,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       const isPdfLoading = pdfLoadingIds.has(item.orderId);
       const isStatusUpdating = statusUpdatingIds.has(item.orderId);
       const currentStatus = String(detail?.status || item.status || '').toUpperCase();
-      const canMarkReady = currentStatus === 'CONFIRMED';
-      const canMarkOutForDelivery = currentStatus === 'READY';
+      const deliveryAddress = detail?.deliveryAddress || '';
 
       return (
         <View style={[styles.orderCard, !isSelected && styles.orderCardMuted]}>
@@ -745,6 +883,12 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
             </TouchableOpacity>
           </View>
 
+          {!isExpanded ? (
+            <View style={styles.collapsedTrackWrap}>
+              <OrderStatusTracker status={currentStatus} compact />
+            </View>
+          ) : null}
+
           {isExpanded && (
             <View style={styles.cardBody}>
               <DetailRow label="Order ID" value={String(item.orderId)} />
@@ -757,9 +901,22 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
 
               <DetailRow label="Status" value={prettyStatus(detail?.status || item.status)} />
               <DetailRow label="Delivery type" value={detail?.deliveryType || item.deliveryType || '-'} />
-              <DetailRow label="Delivery address" value={detail?.deliveryAddress || '-'} />
               <DetailRow label="Shop name" value={detail?.shopName || '-'} />
               <DetailRow label="Placed on" value={formatDate(detail?.createdAt || item.createdAt)} />
+
+              <OrderStatusTracker
+                status={currentStatus}
+                busy={isStatusUpdating}
+                onAdvance={(action) => confirmStatusUpdate(item, action)}
+              />
+
+              <View style={styles.addressBox}>
+                <View style={styles.addressTitleRow}>
+                  <PinIcon />
+                  <Text style={styles.addressTitle}>DELIVERY ADDRESS</Text>
+                </View>
+                <Text style={styles.addressText}>{deliveryAddress || 'No delivery address on this order.'}</Text>
+              </View>
 
               <View style={styles.divider} />
 
@@ -872,46 +1029,6 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                 </Text>
               )}
 
-              {(canMarkReady || canMarkOutForDelivery) && (
-                <>
-                  <View style={styles.divider} />
-                  <Text style={styles.sectionTitle}>Update status</Text>
-                  <Text style={styles.sectionHint}>
-                    {canMarkReady
-                      ? 'Pack the order, then mark it ready for pickup or delivery.'
-                      : 'Hand the order to the delivery person when it leaves the shop.'}
-                  </Text>
-                  {canMarkReady ? (
-                    <TouchableOpacity
-                      style={[styles.statusActionBtn, isStatusUpdating && styles.statusActionBtnDisabled]}
-                      onPress={() => void updateOrderStatus(item, 'ready')}
-                      activeOpacity={0.85}
-                      disabled={isStatusUpdating}
-                    >
-                      {isStatusUpdating ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
-                      ) : (
-                        <Text style={styles.statusActionText}>Mark as ready</Text>
-                      )}
-                    </TouchableOpacity>
-                  ) : null}
-                  {canMarkOutForDelivery ? (
-                    <TouchableOpacity
-                      style={[styles.statusActionBtn, isStatusUpdating && styles.statusActionBtnDisabled]}
-                      onPress={() => void updateOrderStatus(item, 'out-for-delivery')}
-                      activeOpacity={0.85}
-                      disabled={isStatusUpdating}
-                    >
-                      {isStatusUpdating ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
-                      ) : (
-                        <Text style={styles.statusActionText}>Mark out for delivery</Text>
-                      )}
-                    </TouchableOpacity>
-                  ) : null}
-                </>
-              )}
-
               <TouchableOpacity
                 style={styles.pdfBtn}
                 onPress={() => downloadInvoicePdf(item)}
@@ -955,7 +1072,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       statusUpdatingIds,
       toggleItemOutOfStock,
       toggleOutOfStock,
-      updateOrderStatus,
+      confirmStatusUpdate,
     ],
   );
 
@@ -1193,20 +1310,126 @@ const styles = StyleSheet.create({
     backgroundColor: '#2B1E1A',
   },
   pdfBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
-  statusActionBtn: {
-    marginTop: 8,
-    height: 42,
-    borderRadius: 8,
+  collapsedTrackWrap: {
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+  },
+  trackBox: {
+    marginTop: 12,
+    backgroundColor: '#FFF8F1',
+    borderWidth: 1,
+    borderColor: '#F0E2D3',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    paddingBottom: 8,
+  },
+  trackBoxCompact: {
+    marginTop: 0,
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
+  trackTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#5C4033',
+    letterSpacing: 0.6,
+    marginBottom: 8,
+  },
+  trackRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  trackStep: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  trackDotRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  trackLine: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
+  },
+  trackLineHidden: {
+    opacity: 0,
+  },
+  trackLineOn: {
+    backgroundColor: '#2E7D32',
+  },
+  trackLineOff: {
+    backgroundColor: '#E6D4BF',
+  },
+  trackDot: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 2,
+  },
+  trackDotDone: {
+    backgroundColor: '#2E7D32',
+    borderColor: '#2E7D32',
+  },
+  trackDotNext: {
     backgroundColor: '#D2691E',
+    borderColor: '#D2691E',
   },
-  statusActionBtnDisabled: {
-    opacity: 0.7,
+  trackDotIdle: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#D8C8B8',
   },
-  statusActionText: {
-    color: '#FFFFFF',
-    fontSize: 13,
+  trackLabel: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#A89685',
+    textAlign: 'center',
+    lineHeight: 12,
+    minHeight: 24,
+  },
+  trackLabelDone: {
+    color: '#2E7D32',
+  },
+  trackLabelNext: {
+    color: '#D2691E',
+  },
+  trackHint: {
+    fontSize: 11,
+    color: '#8A7A6A',
+    fontWeight: '600',
+    marginTop: 6,
+    lineHeight: 15,
+  },
+  addressBox: {
+    marginTop: 10,
+    backgroundColor: '#FFF8F1',
+    borderWidth: 1,
+    borderColor: '#F0E2D3',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  addressTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  addressTitle: {
+    fontSize: 10,
     fontWeight: '800',
+    color: '#5C4033',
+    letterSpacing: 0.6,
+    marginLeft: 6,
+  },
+  addressText: {
+    fontSize: 12.5,
+    color: '#2B1E1A',
+    fontWeight: '600',
+    lineHeight: 18,
   },
 });
