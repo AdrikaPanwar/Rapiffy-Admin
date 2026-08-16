@@ -15,7 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Print from 'expo-print';
+import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { BottomNavBar } from '../components/BottomNavBar';
 
@@ -148,20 +148,6 @@ const formatDate = (iso: string): string => {
   if (hours === 0) hours = 12;
   return `${day} ${month} ${year}, ${hours}:${minutes} ${ampm}`;
 };
-
-const formatInvoiceDate = (iso: string): string => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return String(iso);
-  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
-};
-
-const escapeHtml = (value: string): string =>
-  String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 
 const toNumber = (value: any, fallback = 0): number => {
   const n = Number(value);
@@ -320,114 +306,6 @@ const normalizeInvoice = (raw: any): InvoiceInfo | null => {
     deliveryCharge: toNumber(source.deliveryCharge),
     totalAmount: toNumber(source.totalAmount),
   };
-};
-
-const moneyPlain = (value: number): string => {
-  const n = Number(value);
-  return (isNaN(n) ? 0 : n).toFixed(2);
-};
-
-const buildCustomerInvoiceHtml = (invoice: InvoiceInfo): string => {
-  const shops = Array.isArray(invoice.shops) ? invoice.shops : [];
-  let totalItems = 0;
-  const shopSections = shops.map((shop) => {
-    const items = Array.isArray(shop.items) ? shop.items : [];
-    totalItems += items.length;
-    const rows = items.map((item, index) => {
-      const unit = [item.unitValue, item.unit].filter(Boolean).join(' ');
-      return `<tr>
-        <td>${index + 1}</td>
-        <td class="left">${escapeHtml(item.productName)}${item.brand ? `<br/><small>${escapeHtml(item.brand)}</small>` : ''}${unit ? `<br/><small>${escapeHtml(unit)}</small>` : ''}</td>
-        <td>${item.quantity}</td>
-        <td>&#8377;${moneyPlain(item.sellingPrice)}</td>
-        <td>${escapeHtml(item.gstSlab || '-')}</td>
-        <td>&#8377;${moneyPlain(item.lineTotal)}</td>
-      </tr>`;
-    }).join('');
-    return `<div class="shop-section">
-      <div class="shop-title">${escapeHtml(shop.shopName || 'Shop')}</div>
-      <table class="items">
-        <thead><tr><th>#</th><th>Product</th><th>Qty</th><th>Price</th><th>GST</th><th>Total</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <div class="shop-subtotal">Shop Total: <span>&#8377;${moneyPlain(shop.shopTotal)}</span></div>
-    </div>`;
-  }).join('');
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8"/>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; font-size: 12px; color: #333; padding: 30px; }
-    .header-table { width: 100%; margin-bottom: 20px; }
-    .app-name { font-size: 26px; font-weight: bold; color: #e63946; }
-    .invoice-meta { text-align: right; }
-    .invoice-meta h2 { font-size: 20px; color: #333; }
-    .invoice-meta p { font-size: 11px; color: #666; margin-top: 2px; }
-    .divider { border-top: 2px solid #e63946; margin: 15px 0; }
-    .address-table { width: 100%; margin-bottom: 20px; }
-    .address-box { width: 48%; vertical-align: top; border: 1px solid #ddd; padding: 12px; }
-    .address-box h4 { font-size: 10px; color: #e63946; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; }
-    .address-box p { font-size: 11px; color: #555; margin-top: 3px; }
-    .address-box .name { font-size: 13px; font-weight: bold; color: #333; }
-    .shop-section { margin-bottom: 24px; }
-    .shop-title { background-color: #f0f0f0; padding: 8px 12px; font-size: 13px; font-weight: bold; color: #333; border-left: 4px solid #e63946; margin-bottom: 6px; }
-    table.items { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
-    table.items thead tr { background-color: #333; color: white; }
-    table.items thead th { padding: 8px 10px; font-size: 11px; text-align: center; }
-    table.items tbody td { padding: 8px 10px; text-align: center; border-bottom: 1px solid #eee; }
-    table.items tbody td.left { text-align: left; }
-    table.items tbody td small { color: #888; font-size: 10px; }
-    .shop-subtotal { text-align: right; font-size: 11px; color: #555; padding: 4px 0; }
-    .shop-subtotal span { font-weight: bold; color: #333; }
-    table.totals { width: 40%; float: right; border-collapse: collapse; border: 1px solid #ddd; margin-top: 10px; }
-    table.totals td { padding: 7px 12px; font-size: 12px; border-bottom: 1px solid #eee; }
-    table.totals td:last-child { text-align: right; font-weight: bold; }
-    table.totals .total-row { background-color: #333; color: white; }
-    .footer { clear: both; margin-top: 40px; text-align: center; font-size: 11px; color: #999; border-top: 1px solid #eee; padding-top: 10px; }
-  </style>
-</head>
-<body>
-  <table class="header-table">
-    <tr>
-      <td><span class="app-name">rapiffy</span></td>
-      <td class="invoice-meta">
-        <h2>ORDER SUMMARY</h2>
-        <p><b>${escapeHtml(invoice.orderNumber)}</b></p>
-        <p>Date: ${escapeHtml(formatInvoiceDate(invoice.orderDate))}</p>
-      </td>
-    </tr>
-  </table>
-  <hr class="divider"/>
-  <table class="address-table">
-    <tr>
-      <td class="address-box">
-        <h4>Billed To</h4>
-        <p class="name">${escapeHtml(invoice.customerPhone)}</p>
-        <p>${escapeHtml(invoice.customerPhone)}</p>
-        <p>${escapeHtml(invoice.deliveryAddress)}</p>
-      </td>
-      <td style="width:4%;"></td>
-      <td class="address-box">
-        <h4>Delivery Info</h4>
-        <p><b>Type:</b> ${escapeHtml(invoice.deliveryType)}</p>
-        <p><b>Shops:</b> ${shops.length}</p>
-        <p><b>Total Items:</b> ${totalItems}</p>
-      </td>
-    </tr>
-  </table>
-  ${shopSections}
-  <table class="totals">
-    <tr><td>Subtotal</td><td>&#8377;${moneyPlain(invoice.subtotal)}</td></tr>
-    <tr><td>GST</td><td>&#8377;${moneyPlain(invoice.totalGst)}</td></tr>
-    <tr><td>Delivery</td><td>&#8377;${moneyPlain(invoice.deliveryCharge)}</td></tr>
-    <tr class="total-row"><td>GRAND TOTAL</td><td>&#8377;${moneyPlain(invoice.totalAmount)}</td></tr>
-  </table>
-  <div class="footer">Thank you for shopping with rapiffy! Your order is being processed.</div>
-</body>
-</html>`;
 };
 
 const itemStockKey = (orderId: number, orderItemId: number): string => `${orderId}:${orderItemId}`;
@@ -919,43 +797,26 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       });
 
       try {
-        let invoice = invoices[order.orderId];
-        if (!invoice) {
-          const response = await fetch(`${BASE_URL}/v1/admin/orders/${order.orderId}/invoice`, {
-            method: 'GET',
+        const destination = new File(Paths.cache, `invoice-${order.orderId}.pdf`);
+        const downloaded = await File.downloadFileAsync(
+          `${BASE_URL}/v1/admin/orders/${order.orderId}/invoice/pdf`,
+          destination,
+          {
             headers: {
-              accept: '*/*',
               Authorization: `Bearer ${token}`,
+              accept: 'application/pdf',
             },
-          });
-          const payload = parseJson(await response.text());
-          if (!response.ok) {
-            Alert.alert(
-              'Could not download PDF',
-              readMessage(payload, 'Invoice is not ready yet. Confirm the order first, then try again.'),
-            );
-            return;
-          }
-          const parsed = normalizeInvoice(payload);
-          if (parsed) {
-            invoice = parsed;
-            setInvoices((prev) => ({ ...prev, [order.orderId]: parsed }));
-          }
-        }
+            idempotent: true,
+          },
+        );
 
-        if (!invoice) {
-          Alert.alert('Could not download PDF', 'Invoice data was empty.');
-          return;
-        }
-
-        const printed = await Print.printToFileAsync({ html: buildCustomerInvoiceHtml(invoice) });
         const canShare = await Sharing.isAvailableAsync();
         if (!canShare) {
-          Alert.alert('Invoice saved', 'Sharing is not available on this device.');
+          Alert.alert('Invoice downloaded', 'Sharing is not available on this device.');
           return;
         }
 
-        await Sharing.shareAsync(printed.uri, {
+        await Sharing.shareAsync(downloaded.uri, {
           mimeType: 'application/pdf',
           UTI: 'com.adobe.pdf',
           dialogTitle: 'Share invoice PDF',
@@ -973,7 +834,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         });
       }
     },
-    [invoices, resolveToken],
+    [resolveToken],
   );
 
   const applyDetailToList = useCallback((orderId: number, detail: OrderDetail) => {
