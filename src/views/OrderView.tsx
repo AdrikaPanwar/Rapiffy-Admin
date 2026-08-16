@@ -341,34 +341,38 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
         {TRACK_STEPS.map((step, index) => {
           const stepRank = index + 1;
           const done = !blocked && rank >= stepRank;
-          const action = blocked || compact ? null : getStepAction(status, step.key);
-          const isNext = Boolean(action);
+          const stepAction = blocked ? null : getStepAction(status, step.key);
+          const action = compact ? null : stepAction;
+          const isNext = Boolean(stepAction);
           const leftOn = index > 0 && !blocked && rank >= index;
           const rightOn = index < TRACK_STEPS.length - 1 && !blocked && rank > stepRank;
 
           return (
-            <View key={step.key} style={styles.trackStep}>
+            <TouchableOpacity
+              key={step.key}
+              style={styles.trackStep}
+              disabled={!action || busy}
+              onPress={() => {
+                if (action && onAdvance) onAdvance(action);
+              }}
+              activeOpacity={action ? 0.7 : 1}
+            >
               <View style={styles.trackDotRow}>
                 <View style={[styles.trackLine, index === 0 && styles.trackLineHidden, leftOn ? styles.trackLineOn : styles.trackLineOff]} />
-                <TouchableOpacity
+                <View
                   style={[
                     styles.trackDot,
                     done && styles.trackDotDone,
                     isNext && styles.trackDotNext,
                     !done && !isNext && styles.trackDotIdle,
                   ]}
-                  disabled={!action || busy}
-                  onPress={() => {
-                    if (action && onAdvance) onAdvance(action);
-                  }}
-                  activeOpacity={action ? 0.7 : 1}
                 >
                   {busy && isNext ? (
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : done ? (
                     <TrackCheckIcon />
                   ) : null}
-                </TouchableOpacity>
+                </View>
                 <View style={[styles.trackLine, index === TRACK_STEPS.length - 1 && styles.trackLineHidden, rightOn ? styles.trackLineOn : styles.trackLineOff]} />
               </View>
               <Text
@@ -381,7 +385,7 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
               >
                 {step.label}
               </Text>
-            </View>
+            </TouchableOpacity>
           );
         })}
       </View>
@@ -430,6 +434,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
   const [invoiceErrorById, setInvoiceErrorById] = useState<Record<number, string>>({});
   const [pdfLoadingIds, setPdfLoadingIds] = useState<Set<number>>(new Set());
   const [statusUpdatingIds, setStatusUpdatingIds] = useState<Set<number>>(new Set());
+  const [pendingActionById, setPendingActionById] = useState<Record<number, StatusAction>>({});
 
   const resolveToken = useCallback(async (): Promise<string | null> => {
     const fromProp = authToken && authToken.trim() !== '' ? authToken.trim() : '';
@@ -779,18 +784,27 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
   );
 
   const confirmStatusUpdate = useCallback((order: OrderSummary, action: StatusAction) => {
-    const isReady = action === 'ready';
-    Alert.alert(
-      isReady ? 'Mark as ready?' : 'Mark out for delivery?',
-      isReady
-        ? 'This marks the order ready. The customer app will show the next step.'
-        : 'This marks the order out for delivery. The customer app will show the next step.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: isReady ? 'Mark ready' : 'Mark out for delivery', onPress: () => void updateOrderStatus(order, action) },
-      ],
-    );
-  }, [updateOrderStatus]);
+    setPendingActionById((prev) => ({ ...prev, [order.orderId]: action }));
+  }, []);
+
+  const cancelStatusUpdate = useCallback((orderId: number) => {
+    setPendingActionById((prev) => {
+      const next = { ...prev };
+      delete next[orderId];
+      return next;
+    });
+  }, []);
+
+  const commitStatusUpdate = useCallback((order: OrderSummary) => {
+    const action = pendingActionById[order.orderId];
+    if (!action) return;
+    setPendingActionById((prev) => {
+      const next = { ...prev };
+      delete next[order.orderId];
+      return next;
+    });
+    void updateOrderStatus(order, action);
+  }, [pendingActionById, updateOrderStatus]);
 
   const toggleOutOfStock = useCallback((orderId: number) => {
     setOutOfStockIds((prev) => {
@@ -834,6 +848,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       const isStatusUpdating = statusUpdatingIds.has(item.orderId);
       const currentStatus = String(detail?.status || item.status || '').toUpperCase();
       const deliveryAddress = detail?.deliveryAddress || '';
+      const pendingAction = pendingActionById[item.orderId];
 
       return (
         <View style={[styles.orderCard, !isSelected && styles.orderCardMuted]}>
@@ -909,6 +924,42 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                 busy={isStatusUpdating}
                 onAdvance={(action) => confirmStatusUpdate(item, action)}
               />
+
+              {pendingAction ? (
+                <View style={styles.confirmBox}>
+                  <Text style={styles.confirmTitle}>
+                    {pendingAction === 'ready' ? 'Mark as ready?' : 'Mark out for delivery?'}
+                  </Text>
+                  <Text style={styles.confirmText}>
+                    {pendingAction === 'ready'
+                      ? 'The customer app will show this order as ready.'
+                      : 'The customer app will show this order as out for delivery.'}
+                  </Text>
+                  <View style={styles.confirmRow}>
+                    <TouchableOpacity
+                      style={styles.confirmCancelBtn}
+                      onPress={() => cancelStatusUpdate(item.orderId)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.confirmCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.confirmGoBtn}
+                      onPress={() => commitStatusUpdate(item)}
+                      activeOpacity={0.85}
+                      disabled={isStatusUpdating}
+                    >
+                      {isStatusUpdating ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.confirmGoText}>
+                          {pendingAction === 'ready' ? 'Mark ready' : 'Mark out for delivery'}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : null}
 
               <View style={styles.addressBox}>
                 <View style={styles.addressTitleRow}>
@@ -1073,6 +1124,9 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       toggleItemOutOfStock,
       toggleOutOfStock,
       confirmStatusUpdate,
+      cancelStatusUpdate,
+      commitStatusUpdate,
+      pendingActionById,
     ],
   );
 
@@ -1149,7 +1203,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
             data={orders}
             keyExtractor={keyExtractor}
             renderItem={renderOrderCard}
-            extraData={{ expandedIds, outOfStockIds, outOfStockItemKeys, orderDetails, invoices, detailLoadingIds, pdfLoadingIds, statusUpdatingIds }}
+            extraData={{ expandedIds, outOfStockIds, outOfStockItemKeys, orderDetails, invoices, detailLoadingIds, pdfLoadingIds, statusUpdatingIds, pendingActionById }}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
             refreshControl={
@@ -1431,5 +1485,59 @@ const styles = StyleSheet.create({
     color: '#2B1E1A',
     fontWeight: '600',
     lineHeight: 18,
+  },
+  confirmBox: {
+    marginTop: 10,
+    backgroundColor: '#FFF5EA',
+    borderWidth: 1,
+    borderColor: '#E6C8A8',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  confirmTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#2B1E1A',
+  },
+  confirmText: {
+    fontSize: 12,
+    color: '#5C4033',
+    fontWeight: '600',
+    marginTop: 4,
+    lineHeight: 16,
+  },
+  confirmRow: {
+    flexDirection: 'row',
+    marginTop: 10,
+  },
+  confirmCancelBtn: {
+    flex: 1,
+    height: 40,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#C7B7A6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  confirmCancelText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#5C4033',
+  },
+  confirmGoBtn: {
+    flex: 1.3,
+    height: 40,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#D2691E',
+  },
+  confirmGoText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
 });
