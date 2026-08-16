@@ -390,7 +390,7 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
           const stepRank = index + 1;
           const done = !blocked && rank >= stepRank;
           const stepAction = blocked ? null : getStepAction(status, step.key);
-          const action = compact ? null : stepAction;
+          const action = stepAction;
           const isNext = Boolean(stepAction);
           const leftOn = index > 0 && !blocked && rank >= index;
           const rightOn = index < TRACK_STEPS.length - 1 && !blocked && rank > stepRank;
@@ -400,6 +400,7 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
               key={step.key}
               style={styles.trackStep}
               disabled={!action || busy}
+              hitSlop={action ? { top: 8, bottom: 8, left: 4, right: 4 } : undefined}
               onPress={() => {
                 if (action && onAdvance) onAdvance(action);
               }}
@@ -412,6 +413,7 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
                     styles.trackDot,
                     done && styles.trackDotDone,
                     isNext && styles.trackDotNext,
+                    isNext && !done && styles.trackDotTappable,
                     !done && !isNext && styles.trackDotIdle,
                   ]}
                 >
@@ -439,9 +441,11 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
       </View>
       {blocked ? (
         <Text style={styles.trackHint}>This order is {prettyStatus(status).toLowerCase()} and cannot be moved forward.</Text>
-      ) : compact ? null : nextAction ? (
-        <Text style={styles.trackHint}>{ACTION_COPY[nextAction].hint}</Text>
-      ) : rank >= 4 ? (
+      ) : nextAction ? (
+        <Text style={styles.trackHint}>
+          {compact ? 'Tap the orange step to update the customer app.' : ACTION_COPY[nextAction].hint}
+        </Text>
+      ) : compact ? null : rank >= 4 ? (
         <Text style={styles.trackHint}>This order is delivered. The customer app already shows this step.</Text>
       ) : String(status || '').toUpperCase() === 'PAYMENT_PENDING' ? (
         <Text style={styles.trackHint}>Payment is still pending. You can mark Ordered after payment.</Text>
@@ -493,7 +497,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
   const fetchOrders = useCallback(
     async (
       statusFilter: OrderStatusFilter,
-      mode: 'initial' | 'refresh' = 'initial',
+      mode: 'initial' | 'refresh' | 'silent' = 'initial',
       signal?: AbortSignal,
     ) => {
       const token = await resolveToken();
@@ -501,6 +505,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       if (signal?.aborted) return;
 
       if (!token) {
+        if (mode === 'silent') return;
         setErrorMessage('You are not logged in. Please sign in again.');
         setOrders([]);
         setIsLoading(false);
@@ -510,10 +515,12 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
 
       if (mode === 'refresh') {
         setIsRefreshing(true);
-      } else {
+      } else if (mode === 'initial') {
         setIsLoading(true);
       }
-      setErrorMessage(null);
+      if (mode !== 'silent') {
+        setErrorMessage(null);
+      }
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 90000);
@@ -540,6 +547,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         if (signal?.aborted) return;
 
         if (!response.ok) {
+          if (mode === 'silent') return;
           if (response.status === 401 || response.status === 403) {
             setErrorMessage('Session expired. Please log in again.');
           } else {
@@ -554,6 +562,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         const list = unwrapList(payload);
 
         if (!list) {
+          if (mode === 'silent') return;
           setErrorMessage('Could not read the orders response. Pull to refresh and try again.');
           setOrders([]);
           return;
@@ -566,7 +575,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         if (signal?.aborted) return;
         setOrders(normalized);
       } catch (error: any) {
-        if (signal?.aborted) {
+        if (signal?.aborted || mode === 'silent') {
           return;
         }
         if (error?.name === 'AbortError') {
@@ -581,7 +590,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         if (signal) {
           signal.removeEventListener('abort', onParentAbort);
         }
-        if (!signal?.aborted) {
+        if (!signal?.aborted && mode !== 'silent') {
           setIsLoading(false);
           setIsRefreshing(false);
         }
@@ -801,12 +810,13 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       });
 
       try {
+        const headers = {
+          accept: '*/*',
+          Authorization: `Bearer ${token}`,
+        };
         const response = await fetch(`${BASE_URL}/v1/admin/orders/${order.orderId}/${action}`, {
           method: 'PUT',
-          headers: {
-            accept: '*/*',
-            Authorization: `Bearer ${token}`,
-          },
+          headers,
         });
 
         const responseText = await response.text();
@@ -820,8 +830,24 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
           return;
         }
 
-        const detail = normalizeDetail(payload, order);
+        let detail = normalizeDetail(payload, order);
         applyDetailToList(order.orderId, detail);
+
+        try {
+          const getResponse = await fetch(`${BASE_URL}/v1/admin/orders/${order.orderId}`, {
+            method: 'GET',
+            headers,
+          });
+          const getText = await getResponse.text();
+          if (getResponse.ok) {
+            detail = normalizeDetail(parseJson(getText), order);
+            applyDetailToList(order.orderId, detail);
+          }
+        } catch {
+          // Keep the PUT body if GET refresh fails.
+        }
+
+        void fetchOrders(selectedStatus, 'silent');
         if (action === 'confirm') {
           void fetchOrderExtras({
             ...order,
@@ -839,12 +865,20 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         });
       }
     },
-    [applyDetailToList, fetchOrderExtras, resolveToken],
+    [applyDetailToList, fetchOrderExtras, fetchOrders, resolveToken, selectedStatus],
   );
 
-  const confirmStatusUpdate = useCallback((order: OrderSummary, action: StatusAction) => {
+  const requestStatusUpdate = useCallback((order: OrderSummary, action: StatusAction) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      next.add(order.orderId);
+      return next;
+    });
     setPendingActionById((prev) => ({ ...prev, [order.orderId]: action }));
-  }, []);
+    if (!orderDetails[order.orderId] && !detailLoadingIds.has(order.orderId)) {
+      fetchOrderExtras(order);
+    }
+  }, [detailLoadingIds, fetchOrderExtras, orderDetails]);
 
   const cancelStatusUpdate = useCallback((orderId: number) => {
     setPendingActionById((prev) => {
@@ -959,7 +993,12 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
 
           {!isExpanded ? (
             <View style={styles.collapsedTrackWrap}>
-              <OrderStatusTracker status={currentStatus} compact />
+              <OrderStatusTracker
+                status={currentStatus}
+                compact
+                busy={isStatusUpdating}
+                onAdvance={(action) => requestStatusUpdate(item, action)}
+              />
             </View>
           ) : null}
 
@@ -981,13 +1020,13 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
               <OrderStatusTracker
                 status={currentStatus}
                 busy={isStatusUpdating}
-                onAdvance={(action) => confirmStatusUpdate(item, action)}
+                onAdvance={(action) => requestStatusUpdate(item, action)}
               />
 
               {!pendingAction && getNextAction(currentStatus) === 'confirm' ? (
                 <TouchableOpacity
                   style={styles.shopActionBtn}
-                  onPress={() => confirmStatusUpdate(item, 'confirm')}
+                  onPress={() => requestStatusUpdate(item, 'confirm')}
                   activeOpacity={0.85}
                   disabled={isStatusUpdating}
                 >
@@ -1189,7 +1228,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       statusUpdatingIds,
       toggleItemOutOfStock,
       toggleOutOfStock,
-      confirmStatusUpdate,
+      requestStatusUpdate,
       cancelStatusUpdate,
       commitStatusUpdate,
       pendingActionById,
@@ -1506,6 +1545,11 @@ const styles = StyleSheet.create({
   trackDotNext: {
     backgroundColor: '#D2691E',
     borderColor: '#D2691E',
+  },
+  trackDotTappable: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
   },
   trackDotIdle: {
     backgroundColor: '#FFFFFF',
