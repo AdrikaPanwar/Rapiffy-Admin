@@ -154,7 +154,7 @@ const toNumber = (value: any, fallback = 0): number => {
 
 const normalizeSummary = (raw: any): OrderSummary | null => {
   if (!raw || typeof raw !== 'object') return null;
-  const orderId = toNumber(raw.orderId, NaN);
+  const orderId = toNumber(raw.orderId ?? raw.id ?? raw.subOrderId, NaN);
   if (isNaN(orderId)) return null;
   return {
     orderId,
@@ -185,6 +185,16 @@ const unwrapObject = (payload: any): any => {
     return payload.data;
   }
   return payload;
+};
+
+const unwrapList = (payload: any): any[] | null => {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return null;
+  if (Array.isArray(payload.data)) return payload.data;
+  if (Array.isArray(payload.content)) return payload.content;
+  if (Array.isArray(payload.orders)) return payload.orders;
+  if (Array.isArray(payload.items)) return payload.items;
+  return null;
 };
 
 const readMessage = (payload: any, fallback: string): string => {
@@ -506,7 +516,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       setErrorMessage(null);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      const timeoutId = setTimeout(() => controller.abort(), 90000);
       const onParentAbort = () => controller.abort();
       if (signal) {
         if (signal.aborted) {
@@ -540,14 +550,15 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         }
 
         const responseText = await response.text();
-        let payload: any = [];
-        try {
-          payload = JSON.parse(responseText);
-        } catch {
-          payload = [];
+        const payload = parseJson(responseText);
+        const list = unwrapList(payload);
+
+        if (!list) {
+          setErrorMessage('Could not read the orders response. Pull to refresh and try again.');
+          setOrders([]);
+          return;
         }
 
-        const list = Array.isArray(payload) ? payload : [];
         const normalized = list
           .map(normalizeSummary)
           .filter((item: OrderSummary | null): item is OrderSummary => item !== null);
@@ -555,7 +566,12 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         if (signal?.aborted) return;
         setOrders(normalized);
       } catch (error: any) {
-        if (error?.name === 'AbortError' || signal?.aborted) {
+        if (signal?.aborted) {
+          return;
+        }
+        if (error?.name === 'AbortError') {
+          setErrorMessage('The server took too long. Please try again.');
+          setOrders([]);
           return;
         }
         setErrorMessage('Network error. Please check your connection and try again.');
@@ -1244,8 +1260,8 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
             <Text style={styles.emptyTitle}>No orders found</Text>
             <Text style={styles.emptySubtitle}>
               {selectedStatus === 'ALL'
-                ? 'There are no orders yet.'
-                : `No orders with status "${prettyStatus(selectedStatus)}".`}
+                ? 'This shop has no orders yet. New customer orders will show up here.'
+                : `No orders with status "${prettyStatus(selectedStatus)}". Try All.`}
             </Text>
           </View>
         ) : (
