@@ -97,6 +97,7 @@ export interface InvoiceInfo {
   customerPhone: string;
   deliveryAddress: string;
   deliveryType: string;
+  items: OrderLineItem[];
   subtotal: number;
   totalGst: number;
   deliveryCharge: number;
@@ -241,6 +242,7 @@ const normalizeDetail = (raw: any, fallback: OrderSummary): OrderDetail => {
 const normalizeInvoice = (raw: any): InvoiceInfo | null => {
   const source = unwrapObject(raw);
   if (!source || typeof source !== 'object') return null;
+  const itemsSource = Array.isArray(source.items) ? source.items : [];
   return {
     invoiceId: String(source.invoiceId || ''),
     orderNumber: String(source.orderNumber || ''),
@@ -253,6 +255,7 @@ const normalizeInvoice = (raw: any): InvoiceInfo | null => {
     customerPhone: String(source.customerPhone || ''),
     deliveryAddress: String(source.deliveryAddress || ''),
     deliveryType: String(source.deliveryType || ''),
+    items: itemsSource.map(normalizeLineItem).filter((item: OrderLineItem | null): item is OrderLineItem => item !== null),
     subtotal: toNumber(source.subtotal),
     totalGst: toNumber(source.totalGst),
     deliveryCharge: toNumber(source.deliveryCharge),
@@ -607,7 +610,9 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       const statusColor = getStatusColor(item.status);
       const detail = orderDetails[item.orderId];
       const invoice = invoices[item.orderId];
-      const items = detail && Array.isArray(detail.items) ? detail.items : [];
+      const items = (detail && Array.isArray(detail.items) && detail.items.length > 0)
+        ? detail.items
+        : (invoice && Array.isArray(invoice.items) ? invoice.items : []);
       const isDetailLoading = detailLoadingIds.has(item.orderId);
       const detailError = detailErrorById[item.orderId];
       const invoiceError = invoiceErrorById[item.orderId];
@@ -763,6 +768,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
               {invoice ? (
                 <>
                   <DetailRow label="Invoice ID" value={invoice.invoiceId || '-'} />
+                  <DetailRow label="Order number" value={invoice.orderNumber || '-'} />
                   <DetailRow label="Invoice date" value={formatDate(invoice.invoiceDate)} />
                   <DetailRow label="Shop name" value={invoice.shopName || '-'} />
                   <DetailRow label="Shop address" value={invoice.shopAddress || '-'} />
@@ -771,6 +777,15 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                   <DetailRow label="Customer name" value={invoice.customerName || '-'} />
                   <DetailRow label="Customer phone" value={invoice.customerPhone || '-'} />
                   <DetailRow label="Delivery address" value={invoice.deliveryAddress || '-'} />
+                  <DetailRow label="Delivery type" value={invoice.deliveryType || '-'} />
+                  <View style={styles.divider} />
+                  <DetailRow label="Subtotal" value={formatMoney(invoice.subtotal)} />
+                  <DetailRow label="GST" value={formatMoney(invoice.totalGst)} />
+                  <DetailRow label="Delivery charge" value={formatMoney(invoice.deliveryCharge)} />
+                  <View style={styles.totalRow}>
+                    <Text style={styles.totalLabel}>Total amount</Text>
+                    <Text style={styles.totalValue}>{formatMoney(invoice.totalAmount)}</Text>
+                  </View>
                 </>
               ) : (
                 <Text style={styles.emptyItemsText}>
