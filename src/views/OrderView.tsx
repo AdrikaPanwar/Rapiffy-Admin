@@ -304,6 +304,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
   const [detailErrorById, setDetailErrorById] = useState<Record<number, string>>({});
   const [invoiceErrorById, setInvoiceErrorById] = useState<Record<number, string>>({});
   const [pdfLoadingIds, setPdfLoadingIds] = useState<Set<number>>(new Set());
+  const [statusUpdatingIds, setStatusUpdatingIds] = useState<Set<number>>(new Set());
 
   const resolveToken = useCallback(async (): Promise<string | null> => {
     const fromProp = authToken && authToken.trim() !== '' ? authToken.trim() : '';
@@ -578,6 +579,80 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
     [resolveToken],
   );
 
+  const applyDetailToList = useCallback((orderId: number, detail: OrderDetail) => {
+    setOrderDetails((prev) => ({ ...prev, [orderId]: detail }));
+    setOrders((prev) =>
+      prev
+        .map((order) => {
+          if (order.orderId !== orderId) return order;
+          return {
+            ...order,
+            orderNumber: detail.orderNumber || order.orderNumber,
+            customerPhone: detail.customerPhone || order.customerPhone,
+            customerName: detail.customerName || order.customerName,
+            subtotal: detail.subtotal,
+            totalGst: detail.totalGst,
+            deliveryCharge: detail.deliveryCharge,
+            totalAmount: detail.totalAmount,
+            totalItems: detail.items.length || order.totalItems,
+            status: detail.status || order.status,
+            deliveryType: detail.deliveryType || order.deliveryType,
+            createdAt: detail.createdAt || order.createdAt,
+          };
+        })
+        .filter((order) => selectedStatus === 'ALL' || order.status === selectedStatus),
+    );
+  }, [selectedStatus]);
+
+  const updateOrderStatus = useCallback(
+    async (order: OrderSummary, action: 'ready' | 'out-for-delivery') => {
+      const token = await resolveToken();
+      if (!token) {
+        Alert.alert('Not logged in', 'Please sign in again to update this order.');
+        return;
+      }
+
+      setStatusUpdatingIds((prev) => {
+        const next = new Set(prev);
+        next.add(order.orderId);
+        return next;
+      });
+
+      try {
+        const response = await fetch(`${BASE_URL}/v1/admin/orders/${order.orderId}/${action}`, {
+          method: 'PUT',
+          headers: {
+            accept: '*/*',
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        const responseText = await response.text();
+        const payload = parseJson(responseText);
+
+        if (!response.ok) {
+          Alert.alert(
+            'Could not update order',
+            readMessage(payload, `The server returned error ${response.status}.`),
+          );
+          return;
+        }
+
+        const detail = normalizeDetail(payload, order);
+        applyDetailToList(order.orderId, detail);
+      } catch {
+        Alert.alert('Network error', 'Please check your connection and try again.');
+      } finally {
+        setStatusUpdatingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(order.orderId);
+          return next;
+        });
+      }
+    },
+    [applyDetailToList, resolveToken],
+  );
+
   const toggleOutOfStock = useCallback((orderId: number) => {
     setOutOfStockIds((prev) => {
       const next = new Set(prev);
@@ -617,6 +692,10 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       const detailError = detailErrorById[item.orderId];
       const invoiceError = invoiceErrorById[item.orderId];
       const isPdfLoading = pdfLoadingIds.has(item.orderId);
+      const isStatusUpdating = statusUpdatingIds.has(item.orderId);
+      const currentStatus = String(detail?.status || item.status || '').toUpperCase();
+      const canMarkReady = currentStatus === 'CONFIRMED';
+      const canMarkOutForDelivery = currentStatus === 'READY';
 
       return (
         <View style={[styles.orderCard, !isSelected && styles.orderCardMuted]}>
@@ -793,6 +872,46 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                 </Text>
               )}
 
+              {(canMarkReady || canMarkOutForDelivery) && (
+                <>
+                  <View style={styles.divider} />
+                  <Text style={styles.sectionTitle}>Update status</Text>
+                  <Text style={styles.sectionHint}>
+                    {canMarkReady
+                      ? 'Pack the order, then mark it ready for pickup or delivery.'
+                      : 'Hand the order to the delivery person when it leaves the shop.'}
+                  </Text>
+                  {canMarkReady ? (
+                    <TouchableOpacity
+                      style={[styles.statusActionBtn, isStatusUpdating && styles.statusActionBtnDisabled]}
+                      onPress={() => void updateOrderStatus(item, 'ready')}
+                      activeOpacity={0.85}
+                      disabled={isStatusUpdating}
+                    >
+                      {isStatusUpdating ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.statusActionText}>Mark as ready</Text>
+                      )}
+                    </TouchableOpacity>
+                  ) : null}
+                  {canMarkOutForDelivery ? (
+                    <TouchableOpacity
+                      style={[styles.statusActionBtn, isStatusUpdating && styles.statusActionBtnDisabled]}
+                      onPress={() => void updateOrderStatus(item, 'out-for-delivery')}
+                      activeOpacity={0.85}
+                      disabled={isStatusUpdating}
+                    >
+                      {isStatusUpdating ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.statusActionText}>Mark out for delivery</Text>
+                      )}
+                    </TouchableOpacity>
+                  ) : null}
+                </>
+              )}
+
               <TouchableOpacity
                 style={styles.pdfBtn}
                 onPress={() => downloadInvoicePdf(item)}
@@ -833,8 +952,10 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       outOfStockIds,
       outOfStockItemKeys,
       pdfLoadingIds,
+      statusUpdatingIds,
       toggleItemOutOfStock,
       toggleOutOfStock,
+      updateOrderStatus,
     ],
   );
 
@@ -911,7 +1032,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
             data={orders}
             keyExtractor={keyExtractor}
             renderItem={renderOrderCard}
-            extraData={{ expandedIds, outOfStockIds, outOfStockItemKeys, orderDetails, invoices, detailLoadingIds, pdfLoadingIds }}
+            extraData={{ expandedIds, outOfStockIds, outOfStockItemKeys, orderDetails, invoices, detailLoadingIds, pdfLoadingIds, statusUpdatingIds }}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
             refreshControl={
@@ -1072,4 +1193,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#2B1E1A',
   },
   pdfBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
+  statusActionBtn: {
+    marginTop: 8,
+    height: 42,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#D2691E',
+  },
+  statusActionBtnDisabled: {
+    opacity: 0.7,
+  },
+  statusActionText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
 });
