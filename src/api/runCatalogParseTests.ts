@@ -5,6 +5,8 @@ import {
   getVariantPackLabel,
   getVariantTitle,
   parseMyProductsTree,
+  resolveAttributeTypes,
+  buildAddVariantsBody,
 } from './adminCatalog';
 
 const assert = (condition: unknown, message: string) => {
@@ -114,5 +116,25 @@ const ignoredCategory = extractProductsFromCategoryPayload({
   products: [],
 });
 assert(ignoredCategory.length === 0, 'empty category groups should not become products');
+
+assert(resolveAttributeTypes(amul).join(',') === 'Flavour', 'attribute types should come from the API product');
+const addBody = buildAddVariantsBody(amul, {
+  id: 0,
+  variantName: 'Butterscotch',
+  brand: 'Amul',
+  unit: 'ml',
+  unitValue: '700',
+  mrp: 160,
+  sellingPrice: 150,
+  stockQuantity: 8,
+  thresholdQuantity: 0,
+  imageUrl: 'https://cdn.example.com/butter.png',
+  expiryDate: '2026-12-01',
+  attributes: { Flavour: 'Butterscotch' },
+});
+assert(addBody.parentShopProductId === 101, 'parentShopProductId must be the API shopProductId');
+assert(addBody.attributeTypes[0] === 'Flavour', 'POST variants requires attributeTypes');
+assert(addBody.variants[0].variantName === 'Butterscotch', 'new variant payload mapping failed');
+assert(addBody.variants[0].id == null, 'new variants must not send an id');
 
 console.log('catalog parse tests passed');
