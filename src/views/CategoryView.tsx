@@ -31,10 +31,7 @@ import {
   asNumber,
   asText,
   parseJsonSafe,
-  unwrapCategoryList,
-  normalizeProduct,
   extractProductsFromCategoryPayload,
-  collectSubCategories,
   buildVariantRequest,
   buildAttributeTypes,
   getVariantPackLabel,
@@ -43,6 +40,9 @@ import {
   getVariantAttributeLabel,
   getProductVariantOptions,
   findProductById,
+  parseMyProductsTree,
+  readCatalogJson,
+  CatalogApiError,
   type CatalogProductItem,
   type ProductVariantItem,
   type ServerCategoryGroup,
@@ -406,6 +406,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const [serverGroups, setServerGroups] = useState<ServerCategoryGroup[]>([]);
   const [backendCategoryFilteredProducts, setBackendCategoryFilteredProducts] = useState<CatalogProductItem[] | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [catalogLoadError, setCatalogLoadError] = useState<string>('');
 
   const [categoriesList, setCategoriesList] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
@@ -477,36 +478,15 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   const syncInventoryFromServer = async (resolvedToken: string) => {
     setIsLoading(true);
+    setCatalogLoadError('');
     try {
       const response = await fetch(adminCatalogUrls.tree(), {
         method: 'GET',
         headers: catalogAuthHeaders(resolvedToken)
       });
 
-      if (!response.ok) {
-        setIsLoading(false);
-        return;
-      }
-
-      const responseText = await response.text();
-      const itemsData = parseJsonSafe(responseText);
-      if (itemsData == null) {
-        setIsLoading(false);
-        return;
-      }
-
-      const safeItems = unwrapCategoryList(itemsData);
-      const normalizedGroups: ServerCategoryGroup[] = safeItems.map((group: any) => {
-        const subCategories = collectSubCategories(group);
-        const extractedProducts = extractProductsFromCategoryPayload(group);
-
-        return {
-          categoryId: group?.categoryId,
-          categoryName: group?.categoryName ? String(group.categoryName) : 'General',
-          subCategories,
-          products: extractedProducts
-        };
-      });
+      const itemsData = await readCatalogJson(response);
+      const normalizedGroups = parseMyProductsTree(itemsData);
 
       setServerGroups(normalizedGroups);
       
@@ -532,13 +512,17 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           ? firstGroup.subCategories[0].subCategoryId
           : null;
         setSelectedSubCategoryId(firstSubId);
+        const treeProducts = Array.isArray(firstGroup?.products) ? firstGroup.products : [];
+        setBackendCategoryFilteredProducts(treeProducts);
         if (firstGroup && Array.isArray(firstGroup.subCategories) && firstGroup.subCategories.length > 0) {
-          fetchProductsForCategoryGroup(firstGroup, resolvedToken);
-        } else {
-          setBackendCategoryFilteredProducts(firstGroup?.products || []);
+          fetchProductsForCategoryGroup(firstGroup, resolvedToken, treeProducts);
         }
+      } else {
+        setBackendCategoryFilteredProducts([]);
       }
     } catch (err) {
+      const message = err instanceof CatalogApiError ? err.message : 'Could not load catalog products from the API.';
+      setCatalogLoadError(message);
       console.log("Sync error:", err);
     } finally {
       setIsLoading(false);
@@ -555,18 +539,25 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         headers: catalogAuthHeaders(token.trim())
       });
 
-      if (!response.ok) return [];
-      const resText = await response.text();
-      return extractProductsFromCategoryPayload(parseJsonSafe(resText));
+      const payload = await readCatalogJson(response);
+      return extractProductsFromCategoryPayload(payload);
     } catch (error) {
+      console.log('Subcategory catalog fetch failed:', error);
       return [];
     }
   }, [authToken]);
 
-  const fetchProductsForCategoryGroup = async (group: ServerCategoryGroup, overrideToken?: string) => {
+  const fetchProductsForCategoryGroup = async (
+    group: ServerCategoryGroup,
+    overrideToken?: string,
+    fallbackProducts?: CatalogProductItem[]
+  ) => {
+    const treeProducts = Array.isArray(fallbackProducts)
+      ? fallbackProducts
+      : (Array.isArray(group.products) ? group.products : []);
     const subCategories = Array.isArray(group.subCategories) ? group.subCategories : [];
     if (subCategories.length === 0) {
-      setBackendCategoryFilteredProducts(Array.isArray(group.products) ? group.products : []);
+      setBackendCategoryFilteredProducts(treeProducts);
       return;
     }
 
@@ -584,9 +575,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           }
         });
       });
-      setBackendCategoryFilteredProducts(merged);
+      setBackendCategoryFilteredProducts(merged.length > 0 ? merged : treeProducts);
     } catch (error) {
-      setBackendCategoryFilteredProducts(Array.isArray(group.products) ? group.products : []);
+      setBackendCategoryFilteredProducts(treeProducts);
     }
   };
 
@@ -599,8 +590,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     const firstSubId = subCategories.length > 0 ? subCategories[0].subCategoryId : null;
     setSelectedSubCategoryId(firstSubId);
     if (matchedGroup) {
-      setBackendCategoryFilteredProducts(Array.isArray(matchedGroup.products) ? matchedGroup.products : []);
-      fetchProductsForCategoryGroup(matchedGroup);
+      const treeProducts = Array.isArray(matchedGroup.products) ? matchedGroup.products : [];
+      setBackendCategoryFilteredProducts(treeProducts);
+      fetchProductsForCategoryGroup(matchedGroup, undefined, treeProducts);
     } else {
       setBackendCategoryFilteredProducts([]);
     }
@@ -1077,7 +1069,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           ) : (!filteredGridProducts || filteredGridProducts.length === 0) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
               <Text style={{ fontSize: 13, color: '#5C4033', fontWeight: '700', textAlign: 'center' }}>
-                {safeCategories.length === 0 ? "Catalog is Empty" : "No products inside this catalog node"}
+                {catalogLoadError
+                  ? catalogLoadError
+                  : safeCategories.length === 0
+                    ? "No products returned from GET /v1/admin/catalog/my-products"
+                    : "No products inside this catalog node"}
               </Text>
             </View>
           ) : (

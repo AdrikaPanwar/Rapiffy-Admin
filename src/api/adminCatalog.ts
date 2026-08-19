@@ -94,6 +94,33 @@ export type ProductExtras = {
 const UNIT_ATTR_KEYS = new Set(['unit', 'unitvalue', 'unit_value', 'uom', 'pack', 'packsize', 'size']);
 const ATTR_LABEL_ORDER = ['flavour', 'flavor', 'colour', 'color', 'size', 'type', 'variant', 'weight'];
 
+export class CatalogApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'CatalogApiError';
+    this.status = status;
+  }
+}
+
+export const catalogErrorMessage = (payload: any, status: number): string =>
+  asText(payload?.message) || asText(payload?.error) || `Catalog API failed (${status})`;
+
+export const readCatalogJson = async (response: Response): Promise<any> => {
+  const text = await response.text();
+  const json = parseJsonSafe(text);
+  if (!response.ok) {
+    throw new CatalogApiError(response.status, catalogErrorMessage(json, response.status));
+  }
+  return json;
+};
+
+const readActiveFlag = (raw: any): boolean => {
+  if (typeof raw?.active === 'boolean') return raw.active;
+  if (typeof raw?.isActive === 'boolean') return raw.isActive;
+  return true;
+};
+
 export const asText = (value: any): string => {
   const text = String(value ?? '').trim();
   if (!text || text === 'string' || text === 'null' || text === 'undefined') return '';
@@ -208,7 +235,7 @@ export const normalizeVariant = (raw: any): ProductVariantItem | null => {
     longDescription: asText(raw.longDescription),
     gstSlab: asText(raw.gstSlab),
     attributes,
-    active: raw.active !== false,
+    active: readActiveFlag(raw),
   };
 };
 
@@ -250,7 +277,7 @@ export const normalizeProduct = (raw: any, extras?: ProductExtras): CatalogProdu
     variants,
     attributeTypes,
     unlisted: !!raw.unlisted,
-    active: raw.active !== false,
+    active: readActiveFlag(raw),
   };
 };
 
@@ -319,6 +346,27 @@ export const extractProductsFromCategoryPayload = (payload: any): CatalogProduct
 
   visit(source);
   return products;
+};
+
+export const parseMyProductsTree = (payload: any): ServerCategoryGroup[] => {
+  const rows = unwrapCategoryList(payload);
+  return rows
+    .map((group: any) => {
+      if (!group || typeof group !== 'object') return null;
+      const subCategories = collectSubCategories(group);
+      const products = extractProductsFromCategoryPayload(group);
+      const categoryName = asText(group.categoryName) || 'General';
+      if (!group.categoryId && subCategories.length === 0 && products.length === 0 && !asText(group.categoryName)) {
+        return null;
+      }
+      return {
+        categoryId: asNumber(group.categoryId) || undefined,
+        categoryName,
+        subCategories,
+        products,
+      } as ServerCategoryGroup;
+    })
+    .filter((group: ServerCategoryGroup | null): group is ServerCategoryGroup => group !== null);
 };
 
 export const collectSubCategories = (group: any): SubCategoryItem[] => {
