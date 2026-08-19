@@ -18,8 +18,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { BottomNavBar } from '../components/BottomNavBar';
-
-const BASE_URL = 'https://rapiffy-backend-1.onrender.com';
+import { adminAuthHeaders, adminOrderUrls, statusUpdateUrl, type AdminOrderStatusAction } from '../api/adminOrders';
 
 const STATUS_FILTERS = [
   'ALL',
@@ -85,25 +84,23 @@ export interface OrderDetail {
   updatedAt: string;
 }
 
-export interface ShopInvoiceSection {
+export interface InvoiceInfo {
+  invoiceId: string;
+  orderNumber: string;
+  invoiceDate: string;
   shopName: string;
   shopAddress: string;
+  shopGstNumber: string;
   shopPhone: string;
-  shopTotal: number;
-  items: OrderLineItem[];
-}
-
-export interface InvoiceInfo {
-  orderNumber: string;
-  orderDate: string;
+  customerName: string;
   customerPhone: string;
   deliveryAddress: string;
-  deliveryType: string;
-  shops: ShopInvoiceSection[];
+  items: OrderLineItem[];
   subtotal: number;
   totalGst: number;
   deliveryCharge: number;
   totalAmount: number;
+  deliveryType: string;
 }
 
 export interface OrderViewProps {
@@ -156,7 +153,7 @@ const toNumber = (value: any, fallback = 0): number => {
 
 const normalizeSummary = (raw: any): OrderSummary | null => {
   if (!raw || typeof raw !== 'object') return null;
-  const orderId = toNumber(raw.orderId ?? raw.id ?? raw.subOrderId, NaN);
+  const orderId = toNumber(raw.orderId, NaN);
   if (isNaN(orderId)) return null;
   return {
     orderId,
@@ -251,56 +248,23 @@ const normalizeDetail = (raw: any, fallback: OrderSummary): OrderDetail => {
   };
 };
 
-const normalizeShopSection = (raw: any): ShopInvoiceSection | null => {
-  if (!raw || typeof raw !== 'object') return null;
-  const itemsSource = Array.isArray(raw.items) ? raw.items : [];
-  return {
-    shopName: String(raw.shopName || ''),
-    shopAddress: String(raw.shopAddress || ''),
-    shopPhone: String(raw.shopPhone || ''),
-    shopTotal: toNumber(raw.shopTotal, toNumber(raw.totalAmount)),
-    items: itemsSource.map(normalizeLineItem).filter((item: OrderLineItem | null): item is OrderLineItem => item !== null),
-  };
-};
-
-const flattenInvoiceItems = (invoice?: InvoiceInfo | null): OrderLineItem[] => {
-  if (!invoice || !Array.isArray(invoice.shops)) return [];
-  return invoice.shops.flatMap((shop) => (Array.isArray(shop.items) ? shop.items : []));
-};
-
 const normalizeInvoice = (raw: any): InvoiceInfo | null => {
   const source = unwrapObject(raw);
   if (!source || typeof source !== 'object') return null;
-
-  let shops: ShopInvoiceSection[] = [];
-  if (Array.isArray(source.shops)) {
-    shops = source.shops
-      .map(normalizeShopSection)
-      .filter((shop: ShopInvoiceSection | null): shop is ShopInvoiceSection => shop !== null);
-  } else {
-    const itemsSource = Array.isArray(source.items) ? source.items : [];
-    const items = itemsSource
-      .map(normalizeLineItem)
-      .filter((item: OrderLineItem | null): item is OrderLineItem => item !== null);
-    shops = [{
-      shopName: String(source.shopName || ''),
-      shopAddress: String(source.shopAddress || ''),
-      shopPhone: String(source.shopPhone || ''),
-      shopTotal: toNumber(source.totalAmount),
-      items,
-    }];
-  }
-
-  const orderNumber = String(source.orderNumber || '');
-  if (!orderNumber && shops.every((shop) => shop.items.length === 0)) return null;
-
+  const itemsSource = Array.isArray(source.items) ? source.items : [];
   return {
-    orderNumber,
-    orderDate: String(source.orderDate || source.invoiceDate || ''),
+    invoiceId: String(source.invoiceId || ''),
+    orderNumber: String(source.orderNumber || ''),
+    invoiceDate: String(source.invoiceDate || ''),
+    shopName: String(source.shopName || ''),
+    shopAddress: String(source.shopAddress || ''),
+    shopGstNumber: String(source.shopGstNumber || ''),
+    shopPhone: String(source.shopPhone || ''),
+    customerName: String(source.customerName || ''),
     customerPhone: String(source.customerPhone || ''),
     deliveryAddress: String(source.deliveryAddress || ''),
     deliveryType: String(source.deliveryType || ''),
-    shops,
+    items: itemsSource.map(normalizeLineItem).filter((item: OrderLineItem | null): item is OrderLineItem => item !== null),
     subtotal: toNumber(source.subtotal),
     totalGst: toNumber(source.totalGst),
     deliveryCharge: toNumber(source.deliveryCharge),
@@ -335,7 +299,7 @@ const PinIcon = () => (
   </Svg>
 );
 
-type StatusAction = 'confirm' | 'ready' | 'out-for-delivery' | 'delivered';
+type StatusAction = AdminOrderStatusAction;
 
 const TRACK_STEPS = [
   { key: 'CONFIRMED', label: 'Ordered' },
@@ -584,13 +548,9 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       }
 
       try {
-        const query = statusFilter !== 'ALL' ? `?status=${encodeURIComponent(statusFilter)}` : '';
-        const response = await fetch(`${BASE_URL}/v1/admin/orders${query}`, {
+        const response = await fetch(adminOrderUrls.list(statusFilter), {
           method: 'GET',
-          headers: {
-            accept: '*/*',
-            Authorization: `Bearer ${token}`,
-          },
+          headers: adminAuthHeaders(token),
           signal: controller.signal,
         });
 
@@ -697,15 +657,12 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         return next;
       });
 
-      const headers = {
-        accept: '*/*',
-        Authorization: `Bearer ${token}`,
-      };
+      const headers = adminAuthHeaders(token);
 
       try {
         const [detailResponse, invoiceResponse] = await Promise.all([
-          fetch(`${BASE_URL}/v1/admin/orders/${order.orderId}`, { method: 'GET', headers }),
-          fetch(`${BASE_URL}/v1/admin/orders/${order.orderId}/invoice`, { method: 'GET', headers }),
+          fetch(adminOrderUrls.detail(order.orderId), { method: 'GET', headers }),
+          fetch(adminOrderUrls.invoice(order.orderId), { method: 'GET', headers }),
         ]);
 
         const detailText = await detailResponse.text();
@@ -799,7 +756,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       try {
         const destination = new File(Paths.cache, `invoice-${order.orderId}.pdf`);
         const downloaded = await File.downloadFileAsync(
-          `${BASE_URL}/v1/admin/orders/${order.orderId}/invoice/pdf`,
+          adminOrderUrls.invoicePdf(order.orderId),
           destination,
           {
             headers: {
@@ -877,11 +834,8 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       });
 
       try {
-        const headers = {
-          accept: '*/*',
-          Authorization: `Bearer ${token}`,
-        };
-        const response = await fetch(`${BASE_URL}/v1/admin/orders/${order.orderId}/${action}`, {
+        const headers = adminAuthHeaders(token);
+        const response = await fetch(statusUpdateUrl(order.orderId, action), {
           method: 'PUT',
           headers,
         });
@@ -901,7 +855,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
         applyDetailToList(order.orderId, detail);
 
         try {
-          const getResponse = await fetch(`${BASE_URL}/v1/admin/orders/${order.orderId}`, {
+          const getResponse = await fetch(adminOrderUrls.detail(order.orderId), {
             method: 'GET',
             headers,
           });
@@ -999,7 +953,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       const invoice = invoices[item.orderId];
       const items = (detail && Array.isArray(detail.items) && detail.items.length > 0)
         ? detail.items
-        : flattenInvoiceItems(invoice);
+        : (invoice && Array.isArray(invoice.items) ? invoice.items : []);
       const isDetailLoading = detailLoadingIds.has(item.orderId);
       const detailError = detailErrorById[item.orderId];
       const invoiceError = invoiceErrorById[item.orderId];
@@ -1224,40 +1178,25 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
               <View style={styles.divider} />
 
               <Text style={styles.sectionTitle}>Invoice</Text>
-              <Text style={styles.sectionHint}>Shops grouped, then grand total.</Text>
               {invoice ? (
                 <>
+                  <DetailRow label="Invoice ID" value={invoice.invoiceId || '-'} />
                   <DetailRow label="Order number" value={invoice.orderNumber || '-'} />
-                  <DetailRow label="Order date" value={formatDate(invoice.orderDate)} />
+                  <DetailRow label="Invoice date" value={formatDate(invoice.invoiceDate)} />
+                  <DetailRow label="Shop name" value={invoice.shopName || '-'} />
+                  <DetailRow label="Shop address" value={invoice.shopAddress || '-'} />
+                  <DetailRow label="Shop GST number" value={invoice.shopGstNumber || '-'} />
+                  <DetailRow label="Shop phone" value={invoice.shopPhone || '-'} />
+                  <DetailRow label="Customer name" value={invoice.customerName || '-'} />
                   <DetailRow label="Customer phone" value={invoice.customerPhone || '-'} />
                   <DetailRow label="Delivery address" value={invoice.deliveryAddress || '-'} />
                   <DetailRow label="Delivery type" value={invoice.deliveryType || '-'} />
-
-                  {(Array.isArray(invoice.shops) ? invoice.shops : []).map((shop, shopIndex) => (
-                    <View key={`shop_inv_${item.orderId}_${shopIndex}`} style={styles.shopInvoiceBox}>
-                      <Text style={styles.shopInvoiceTitle}>{shop.shopName || 'Shop'}</Text>
-                      {shop.shopAddress ? <Text style={styles.shopInvoiceMeta}>{shop.shopAddress}</Text> : null}
-                      {shop.shopPhone ? <Text style={styles.shopInvoiceMeta}>{shop.shopPhone}</Text> : null}
-                      {(Array.isArray(shop.items) ? shop.items : []).map((line) => (
-                        <View key={`shop_item_${item.orderId}_${line.orderItemId}`} style={styles.shopInvoiceItemRow}>
-                          <Text style={styles.shopInvoiceItemName} numberOfLines={2}>{line.productName}</Text>
-                          <Text style={styles.shopInvoiceItemQty}>x{line.quantity}</Text>
-                          <Text style={styles.shopInvoiceItemTotal}>{formatMoney(line.lineTotal)}</Text>
-                        </View>
-                      ))}
-                      <View style={styles.shopInvoiceTotalRow}>
-                        <Text style={styles.shopInvoiceTotalLabel}>Shop total</Text>
-                        <Text style={styles.shopInvoiceTotalValue}>{formatMoney(shop.shopTotal)}</Text>
-                      </View>
-                    </View>
-                  ))}
-
                   <View style={styles.divider} />
                   <DetailRow label="Subtotal" value={formatMoney(invoice.subtotal)} />
                   <DetailRow label="GST" value={formatMoney(invoice.totalGst)} />
                   <DetailRow label="Delivery charge" value={formatMoney(invoice.deliveryCharge)} />
                   <View style={styles.totalRow}>
-                    <Text style={styles.totalLabel}>Grand total</Text>
+                    <Text style={styles.totalLabel}>Total amount</Text>
                     <Text style={styles.totalValue}>{formatMoney(invoice.totalAmount)}</Text>
                   </View>
                 </>
@@ -1551,50 +1490,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#2B1E1A',
   },
   pdfBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
-  shopInvoiceBox: {
-    marginTop: 10,
-    backgroundColor: '#FFFBF7',
-    borderWidth: 1,
-    borderColor: '#F0E2D3',
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  shopInvoiceTitle: {
-    backgroundColor: '#FFF8F1',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#2B1E1A',
-  },
-  shopInvoiceMeta: {
-    fontSize: 11,
-    color: '#8A7A6A',
-    fontWeight: '600',
-    paddingHorizontal: 12,
-    paddingTop: 4,
-  },
-  shopInvoiceItemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  shopInvoiceItemName: { flex: 1, fontSize: 12, fontWeight: '700', color: '#2B1E1A', paddingRight: 8 },
-  shopInvoiceItemQty: { fontSize: 11, fontWeight: '700', color: '#8A7A6A', marginRight: 8 },
-  shopInvoiceItemTotal: { fontSize: 12, fontWeight: '800', color: '#2B1E1A' },
-  shopInvoiceTotalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#F0E2D3',
-    marginTop: 4,
-  },
-  shopInvoiceTotalLabel: { fontSize: 12, fontWeight: '700', color: '#5C4033' },
-  shopInvoiceTotalValue: { fontSize: 13, fontWeight: '800', color: '#2B1E1A' },
   collapsedTrackWrap: {
     paddingHorizontal: 10,
     paddingBottom: 10,
