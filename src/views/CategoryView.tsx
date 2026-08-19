@@ -648,8 +648,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   const selectVariantInSheet = useCallback((index: number) => {
     setSelectedVariantIndex(index);
-    if (variantPagerRef.current) {
-      variantPagerRef.current.scrollToIndex({ index, animated: true });
+    try {
+      variantPagerRef.current?.scrollToIndex({ index, animated: true });
+    } catch {
+      variantPagerRef.current?.scrollToOffset({
+        offset: index * (VARIANT_CARD_WIDTH + VARIANT_CARD_GAP),
+        animated: true,
+      });
     }
   }, []);
 
