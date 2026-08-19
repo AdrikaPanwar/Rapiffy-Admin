@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -275,8 +275,45 @@ const buildAttributeTypes = (productTypes?: string[], variants: ProductVariantIt
   return Array.from(keys);
 };
 
-const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility, gridWidth }: { 
-  item: CatalogProductItem; 
+const getVariantPackLabel = (variant: ProductVariantItem, product?: CatalogProductItem): string => {
+  const pack = [asText(variant.unitValue), asText(variant.unit)].filter(Boolean).join(' ');
+  if (pack) return pack;
+  if (product) {
+    const fallback = [asText(product.unitValue), asText(product.unit)].filter(Boolean).join(' ');
+    if (fallback) return fallback;
+  }
+  const attrValues = Object.values(variant.attributes || {}).filter(Boolean);
+  if (attrValues.length > 0) return attrValues.join(' · ');
+  return asText(variant.variantName) || 'Pack';
+};
+
+const getProductVariantOptions = (product: CatalogProductItem): ProductVariantItem[] => {
+  if (product && Array.isArray(product.variants) && product.variants.length > 0) {
+    return product.variants;
+  }
+  return [{
+    id: 0,
+    variantName: product.productName || 'Pack',
+    brand: product.brand || '',
+    unit: product.unit || '',
+    unitValue: product.unitValue || '',
+    mrp: product.mrp,
+    sellingPrice: product.sellingPrice,
+    stockQuantity: product.stockQuantity,
+    thresholdQuantity: product.thresholdQuantity,
+    imageUrl: product.imageUrl,
+    expiryDate: product.expiryDate || '',
+    attributes: {},
+    active: product.active !== false,
+  }];
+};
+
+const VARIANT_CARD_GAP = 10;
+const VARIANT_CARD_WIDTH = Math.min(windowWidth - 72, 280);
+
+const ProductGridItem = React.memo(({ item, onOpenVariants, onEdit, onDelete, onToggleVisibility, gridWidth }: { 
+  item: CatalogProductItem;
+  onOpenVariants: (item: CatalogProductItem) => void;
   onEdit: (item: CatalogProductItem) => void; 
   onDelete: (id: number) => void;
   onToggleVisibility: (id: number, currentActiveState: boolean) => void;
@@ -293,7 +330,7 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
   return (
     <TouchableOpacity 
       style={[styles.productBlockContainer, { maxWidth: (gridWidth / 2) - 10 }, !isVisible && styles.inactiveCardOpacity]}
-      onPress={() => onEdit(item)}
+      onPress={() => onOpenVariants(item)}
       activeOpacity={0.85}
     >
       <View style={styles.topCardFloatingActionBar}>
@@ -352,6 +389,9 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
         <Text style={styles.brandMetaLabel} numberOfLines={1}>{safeBrand}</Text>
         <Text style={styles.productNameLabel} numberOfLines={2}>{safeName}</Text>
         <Text style={styles.unitScaleTag}>{safeUnitVal} {safeUnitType}</Text>
+        {item.hasVariants && Array.isArray(item.variants) && item.variants.length > 0 ? (
+          <Text style={styles.optionCountTag}>{item.variants.length} packs · tap to slide</Text>
+        ) : null}
         <View style={styles.pricingRowStack}>
           <Text style={styles.sellingPriceVal}>₹{item.sellingPrice ?? 0}</Text>
           <Text style={styles.mrpCrossedVal}>₹{item.mrp ?? 0}</Text>
@@ -375,6 +415,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   const [showSidebar, setShowSidebar] = useState<boolean>(false);
   const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
+  const [variantSheetProduct, setVariantSheetProduct] = useState<CatalogProductItem | null>(null);
+  const [selectedVariantIndex, setSelectedVariantIndex] = useState<number>(0);
+  const variantPagerRef = useRef<FlatList<ProductVariantItem>>(null);
   
   const [isEditingMode, setIsEditingMode] = useState<boolean>(false);
   const [targetEditProductId, setTargetEditProductId] = useState<number | null>(null);
@@ -591,6 +634,24 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       console.log("Visibility sync error:", error);
     }
   }, [authToken]);
+
+  const closeVariantSheet = useCallback(() => {
+    setVariantSheetProduct(null);
+    setSelectedVariantIndex(0);
+  }, []);
+
+  const openVariantSheet = useCallback((item: CatalogProductItem) => {
+    if (!item) return;
+    setSelectedVariantIndex(0);
+    setVariantSheetProduct(item);
+  }, []);
+
+  const selectVariantInSheet = useCallback((index: number) => {
+    setSelectedVariantIndex(index);
+    if (variantPagerRef.current) {
+      variantPagerRef.current.scrollToIndex({ index, animated: true });
+    }
+  }, []);
 
   const pickImageFromDeviceGallery = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -906,13 +967,14 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   const renderGridItem = useCallback(({ item }: { item: CatalogProductItem }) => (
     <ProductGridItem 
-      item={item} 
+      item={item}
+      onOpenVariants={openVariantSheet}
       onEdit={openProductForEditingAction} 
       onDelete={deleteProductItem} 
       onToggleVisibility={toggleProductVisibility}
       gridWidth={gridAvailableWidth}
     />
-  ), [openProductForEditingAction, deleteProductItem, toggleProductVisibility, gridAvailableWidth]);
+  ), [openVariantSheet, openProductForEditingAction, deleteProductItem, toggleProductVisibility, gridAvailableWidth]);
 
   const keyExtractor = useCallback((item: CatalogProductItem, index: number) => {
     if (item && item.shopProductId != null) {
@@ -1184,6 +1246,159 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         </View>
       </Modal>
 
+      <Modal
+        transparent
+        visible={!!variantSheetProduct}
+        animationType="slide"
+        onRequestClose={closeVariantSheet}
+      >
+        <View style={styles.variantSheetOverlay}>
+          <TouchableOpacity style={styles.variantSheetDismiss} activeOpacity={1} onPress={closeVariantSheet} />
+          {variantSheetProduct ? (
+            <View style={styles.variantSheetCard}>
+              <View style={styles.variantSheetHandle} />
+              <View style={styles.drawerHeaderFrame}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Text style={styles.brandMetaLabel} numberOfLines={1}>{variantSheetProduct.brand || 'Shop product'}</Text>
+                  <Text style={styles.drawerTitleText} numberOfLines={2}>{variantSheetProduct.productName}</Text>
+                </View>
+                <TouchableOpacity onPress={closeVariantSheet}><Text style={styles.closeDrawerIconText}>X</Text></TouchableOpacity>
+              </View>
+
+              {(() => {
+                const options = getProductVariantOptions(variantSheetProduct);
+                const safeIndex = selectedVariantIndex >= 0 && selectedVariantIndex < options.length ? selectedVariantIndex : 0;
+                const selected = options[safeIndex] || options[0];
+                const heroImage = asHttpUrl(selected?.imageUrl) || asHttpUrl(variantSheetProduct.imageUrl);
+                return (
+                  <>
+                    <View style={styles.variantHeroFrame}>
+                      {heroImage ? (
+                        <Image source={{ uri: heroImage }} style={styles.fullPreviewTargetImage} />
+                      ) : (
+                        <View style={styles.zeptoCoreAssetCircle}>
+                          <Text style={styles.assetFrameChar}>
+                            {(selected?.variantName || variantSheetProduct.productName || 'P').charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+
+                    <Text style={styles.variantSheetSectionLabel}>Select pack size</Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.variantChipRow}
+                    >
+                      {options.map((variant, index) => {
+                        const isActive = index === safeIndex;
+                        return (
+                          <TouchableOpacity
+                            key={`chip_${variantSheetProduct.shopProductId}_${variant.id || index}`}
+                            style={[styles.variantPackChip, isActive && styles.variantPackChipActive]}
+                            onPress={() => selectVariantInSheet(index)}
+                            activeOpacity={0.85}
+                          >
+                            <Text style={[styles.variantPackChipText, isActive && styles.variantPackChipTextActive]}>
+                              {getVariantPackLabel(variant, variantSheetProduct)}
+                            </Text>
+                            <Text style={[styles.variantPackChipPrice, isActive && styles.variantPackChipTextActive]}>
+                              ₹{variant.sellingPrice ?? 0}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+
+                    <FlatList
+                      ref={variantPagerRef}
+                      key={`pager_${variantSheetProduct.shopProductId}`}
+                      data={options}
+                      extraData={safeIndex}
+                      keyExtractor={(variant, index) => `slide_${variantSheetProduct.shopProductId}_${variant.id || index}`}
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      snapToInterval={VARIANT_CARD_WIDTH + VARIANT_CARD_GAP}
+                      decelerationRate="fast"
+                      snapToAlignment="start"
+                      contentContainerStyle={styles.variantSlideRow}
+                      getItemLayout={(_, index) => ({
+                        length: VARIANT_CARD_WIDTH + VARIANT_CARD_GAP,
+                        offset: (VARIANT_CARD_WIDTH + VARIANT_CARD_GAP) * index,
+                        index,
+                      })}
+                      onScrollToIndexFailed={(info) => {
+                        setTimeout(() => {
+                          variantPagerRef.current?.scrollToOffset({
+                            offset: info.index * (VARIANT_CARD_WIDTH + VARIANT_CARD_GAP),
+                            animated: true,
+                          });
+                        }, 80);
+                      }}
+                      onMomentumScrollEnd={(event) => {
+                        const nextIndex = Math.round(
+                          event.nativeEvent.contentOffset.x / (VARIANT_CARD_WIDTH + VARIANT_CARD_GAP)
+                        );
+                        if (nextIndex >= 0 && nextIndex < options.length) {
+                          setSelectedVariantIndex(nextIndex);
+                        }
+                      }}
+                      renderItem={({ item: variant, index }) => {
+                        const isActive = index === safeIndex;
+                        const slideImage = asHttpUrl(variant.imageUrl) || asHttpUrl(variantSheetProduct.imageUrl);
+                        return (
+                          <View style={[styles.variantSlideCard, isActive && styles.variantSlideCardActive, { width: VARIANT_CARD_WIDTH }]}>
+                            {slideImage ? (
+                              <Image source={{ uri: slideImage }} style={styles.variantSlideImage} />
+                            ) : (
+                              <View style={styles.variantSlideImageFallback}>
+                                <Text style={styles.assetFrameChar}>
+                                  {(variant.variantName || 'V').charAt(0).toUpperCase()}
+                                </Text>
+                              </View>
+                            )}
+                            <Text style={styles.variantSlideName} numberOfLines={2}>{variant.variantName || 'Variant'}</Text>
+                            <Text style={styles.variantSlidePack}>{getVariantPackLabel(variant, variantSheetProduct)}</Text>
+                            <View style={styles.pricingRowStack}>
+                              <Text style={styles.sellingPriceVal}>₹{variant.sellingPrice ?? 0}</Text>
+                              <Text style={styles.mrpCrossedVal}>₹{variant.mrp ?? 0}</Text>
+                            </View>
+                            <Text style={styles.variantSlideStock}>
+                              {variant.stockQuantity ?? 0} in stock
+                            </Text>
+                          </View>
+                        );
+                      }}
+                    />
+
+                    <View style={styles.variantSheetPriceBar}>
+                      <View>
+                        <Text style={styles.variantSlidePack}>{getVariantPackLabel(selected, variantSheetProduct)}</Text>
+                        <View style={styles.pricingRowStack}>
+                          <Text style={styles.variantSheetPrice}>₹{selected?.sellingPrice ?? 0}</Text>
+                          <Text style={styles.mrpCrossedVal}>₹{selected?.mrp ?? 0}</Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.variantSheetEditBtn}
+                        onPress={() => {
+                          const productToEdit = variantSheetProduct;
+                          closeVariantSheet();
+                          openProductForEditingAction(productToEdit);
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.variantSheetEditBtnText}>Edit product</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                );
+              })()}
+            </View>
+          ) : null}
+        </View>
+      </Modal>
+
       <BottomNavBar onNavigate={onNavigate} currentActive="category" />
     </SafeAreaView>
   );
@@ -1227,6 +1442,7 @@ const styles = StyleSheet.create({
   brandMetaLabel: { fontSize: 9, fontWeight: '700', color: '#A89685', textTransform: 'uppercase' },
   productNameLabel: { fontSize: 12.5, fontWeight: '700', color: '#2B1E1A', marginVertical: 2, height: 34 },
   unitScaleTag: { fontSize: 10.5, color: '#5C4033', fontWeight: '600', marginBottom: 4 },
+  optionCountTag: { fontSize: 10, color: '#D2691E', fontWeight: '800', marginBottom: 4 },
   pricingRowStack: { flexDirection: 'row', alignItems: 'center' },
   sellingPriceVal: { fontSize: 13, fontWeight: '800', color: '#2B1E1A', marginRight: 6 },
   mrpCrossedVal: { fontSize: 10, color: '#A89685', textDecorationLine: 'line-through' },
@@ -1255,4 +1471,103 @@ const styles = StyleSheet.create({
   miniVariantImageThumb: { width: 24, height: 24, borderRadius: 4, marginRight: 8, resizeMode: 'cover' },
   miniVariantText: { fontSize: 11, color: '#5C4033', flex: 1, fontWeight: '600' },
   miniVariantDeleteCross: { fontSize: 12, color: '#D2691E', fontWeight: '800', paddingHorizontal: 4 },
+  variantSheetOverlay: { flex: 1, backgroundColor: 'rgba(43, 30, 26, 0.45)', justifyContent: 'flex-end' },
+  variantSheetDismiss: { flex: 1 },
+  variantSheetCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 18,
+    maxHeight: '86%',
+  },
+  variantSheetHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#E6D4BF',
+    marginBottom: 8,
+  },
+  variantHeroFrame: {
+    height: 150,
+    borderRadius: 14,
+    backgroundColor: '#FFF8F1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    marginTop: 10,
+  },
+  variantSheetSectionLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#5C4033',
+    marginTop: 14,
+    marginBottom: 8,
+    letterSpacing: 0.4,
+  },
+  variantChipRow: { paddingRight: 8, paddingBottom: 4 },
+  variantPackChip: {
+    minWidth: 78,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E6D4BF',
+    backgroundColor: '#FFFBF7',
+    marginRight: 8,
+  },
+  variantPackChipActive: {
+    borderColor: '#D2691E',
+    backgroundColor: '#FFF5EA',
+  },
+  variantPackChipText: { fontSize: 12, fontWeight: '800', color: '#5C4033' },
+  variantPackChipTextActive: { color: '#D2691E' },
+  variantPackChipPrice: { fontSize: 11, fontWeight: '700', color: '#8A7A6A', marginTop: 2 },
+  variantSlideRow: { paddingVertical: 10, paddingRight: 16 },
+  variantSlideCard: {
+    backgroundColor: '#FFFBF7',
+    borderWidth: 1,
+    borderColor: '#F0E2D3',
+    borderRadius: 14,
+    padding: 10,
+    marginRight: VARIANT_CARD_GAP,
+  },
+  variantSlideCardActive: {
+    borderColor: '#D2691E',
+    backgroundColor: '#FFF8F1',
+  },
+  variantSlideImage: { width: '100%', height: 88, borderRadius: 10, backgroundColor: '#F7EFE5', marginBottom: 8 },
+  variantSlideImageFallback: {
+    width: '100%',
+    height: 88,
+    borderRadius: 10,
+    backgroundColor: '#F7EFE5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  variantSlideName: { fontSize: 13, fontWeight: '800', color: '#2B1E1A' },
+  variantSlidePack: { fontSize: 11, fontWeight: '700', color: '#8A7A6A', marginTop: 2, marginBottom: 4 },
+  variantSlideStock: { fontSize: 11, fontWeight: '700', color: '#5C4033', marginTop: 4 },
+  variantSheetPriceBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F0E2D3',
+  },
+  variantSheetPrice: { fontSize: 20, fontWeight: '800', color: '#2B1E1A', marginRight: 8 },
+  variantSheetEditBtn: {
+    backgroundColor: '#D2691E',
+    height: 42,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  variantSheetEditBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
 });
