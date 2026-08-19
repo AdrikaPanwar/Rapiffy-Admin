@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
@@ -14,269 +14,307 @@ import {
   Image,
   InteractionManager,
   Alert,
-  ActivityIndicator
+  ActivityIndicator,
+  Share,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BottomNavBar } from '../components/BottomNavBar';
-import { adminCatalogUrls, catalogAuthHeaders } from '../api/adminCatalog';
+import {
+  adminCatalogUrls,
+  catalogAuthHeaders,
+  asHttpUrl,
+  asNumber,
+  asText,
+  parseJsonSafe,
+  extractProductsFromCategoryPayload,
+  buildVariantRequest,
+  buildAttributeTypes,
+  getVariantPackLabel,
+  getVariantTitle,
+  getVariantHeroImage,
+  getVariantAttributeLabel,
+  getProductVariantOptions,
+  findProductById,
+  parseMyProductsTree,
+  readCatalogJson,
+  CatalogApiError,
+  type CatalogProductItem,
+  type ProductVariantItem,
+  type ServerCategoryGroup,
+} from '../api/adminCatalog';
 
-const { width: windowWidth } = Dimensions.get('window');
+export type { CatalogProductItem, ProductVariantItem, ServerCategoryGroup };
 
-export interface ProductVariantItem {
-  id: number;
-  variantName: string;
-  brand: string;
-  unit: string;
-  unitValue: string;
-  mrp: number;
-  sellingPrice: number;
-  stockQuantity: number;
-  thresholdQuantity: number;
-  imageUrl: string | null; 
-  expiryDate: string;
-  shortDescription?: string;
-  longDescription?: string;
-  gstSlab?: string;
-  attributes?: Record<string, string>;
-  active?: boolean;
-}
-
-export interface CatalogProductItem {
-  shopProductId: number;
-  masterProductId: number;
-  categoryId?: number;
-  subCategoryId?: number;
-  subCategoryName?: string;
-  productName: string;
-  shortDescription: string;
-  longDescription: string;
-  brand: string;
-  imageUrl: string | null; 
-  mrp: number;
-  sellingPrice: number;
-  stockQuantity: number;
-  thresholdQuantity: number;
-  unit: string;
-  unitValue: string;
-  expiryDate: string | null;
-  categoryName: string; 
-  hasVariants: boolean;
-  variants: ProductVariantItem[];
-  attributeTypes?: string[];
-  unlisted?: boolean;
-  active?: boolean;
-}
-
-export interface SubCategoryItem {
-  subCategoryId: number;
-  subCategoryName: string;
-  products: CatalogProductItem[];
-}
-
-export interface ServerCategoryGroup {
-  categoryId?: number;
-  categoryName: string;
-  subCategories?: SubCategoryItem[];
-  products: CatalogProductItem[];
-}
+const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
+const VARIANT_THUMB_SIZE = 62;
+const VARIANT_THUMB_GAP = 10;
+const VARIANT_THUMB_STEP = VARIANT_THUMB_SIZE + VARIANT_THUMB_GAP;
+const STORY_RAIL_HEIGHT = 84;
+const HERO_HEIGHT = Math.min(360, Math.max(240, Math.round((windowHeight - STORY_RAIL_HEIGHT) * 0.42)));
+const INSTAMART_BLUE = '#1E6BFF';
 
 export interface CategoryViewProps {
   onNavigate?: (screen: 'login' | 'forgot_password' | 'home' | 'category' | 'coverage' | 'order' | 'profile') => void;
   authToken?: string; 
 }
 
-const asText = (value: any): string => {
-  const text = String(value ?? '').trim();
-  if (!text || text === 'string') return '';
-  return text;
-};
+interface ProductDetailPopupProps {
+  product: CatalogProductItem;
+  products: CatalogProductItem[];
+  selectedVariantIndex: number;
+  savedIds: Set<number>;
+  onClose: () => void;
+  onSelectVariant: (index: number) => void;
+  onSwitchProduct: (item: CatalogProductItem) => void;
+  onToggleSave: (id: number) => void;
+}
 
-const asHttpUrl = (value: any): string | null => {
-  const text = asText(value);
-  return text.startsWith('http') ? text : null;
-};
+const variantQtyKey = (shopProductId: number, variantId: number, index: number) =>
+  `${shopProductId}:${variantId || index}`;
 
-const asNumber = (value: any, fallback = 0): number => {
-  const n = Number(value);
-  return isNaN(n) ? fallback : n;
-};
+const ProductDetailPopup = ({
+  product,
+  products,
+  selectedVariantIndex,
+  savedIds,
+  onClose,
+  onSelectVariant,
+  onSwitchProduct,
+  onToggleSave,
+}: ProductDetailPopupProps) => {
+  const options = getProductVariantOptions(product);
+  const safeIndex = selectedVariantIndex >= 0 && selectedVariantIndex < options.length ? selectedVariantIndex : 0;
+  const selected = options[safeIndex] || options[0];
+  const attributeLabel = selected ? getVariantAttributeLabel(selected, product) : '';
+  const packLabel = selected ? getVariantPackLabel(selected, product) : '';
+  const title = selected ? getVariantTitle(selected, product) : product.productName;
+  const description = asText(selected?.shortDescription) || asText(product.shortDescription);
+  const isSaved = savedIds.has(product.shopProductId);
+  const storyProducts = Array.isArray(products) ? products : [];
+  const stockLeft = asNumber(selected?.stockQuantity);
+  const thumbScrollRef = useRef<ScrollView>(null);
+  const storyScrollRef = useRef<ScrollView>(null);
+  const heroRef = useRef<FlatList<ProductVariantItem>>(null);
+  const [qtyByVariant, setQtyByVariant] = useState<Record<string, number>>({});
+  const qtyKey = variantQtyKey(product.shopProductId, selected?.id || 0, safeIndex);
+  const qty = qtyByVariant[qtyKey] || 0;
 
-const asAttributeMap = (raw: any): Record<string, string> => {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  const mapped: Record<string, string> = {};
-  Object.keys(raw).forEach((key) => {
-    const val = asText(raw[key]);
-    if (val) mapped[key] = val;
-  });
-  return mapped;
-};
+  useEffect(() => {
+    thumbScrollRef.current?.scrollTo({ x: Math.max(0, safeIndex) * VARIANT_THUMB_STEP, animated: true });
+    heroRef.current?.scrollToOffset({ offset: Math.max(0, safeIndex) * windowWidth, animated: true });
+  }, [safeIndex, product.shopProductId]);
 
-const parseJsonSafe = (text: string): any => {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-};
-
-const unwrapCategoryList = (payload: any): any[] => {
-  if (Array.isArray(payload)) return payload;
-  if (payload && Array.isArray(payload.data)) return payload.data;
-  if (payload && Array.isArray(payload.content)) return payload.content;
-  return [];
-};
-
-const unwrapCategoryObject = (payload: any): any => {
-  if (payload && typeof payload === 'object' && !Array.isArray(payload) && payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data)) {
-    return payload.data;
-  }
-  return payload;
-};
-
-const normalizeVariant = (raw: any): ProductVariantItem | null => {
-  if (!raw || typeof raw !== 'object') return null;
-  const attributes = asAttributeMap(raw.attributes);
-  return {
-    id: asNumber(raw.id ?? raw.variantId),
-    variantName: asText(raw.variantName) || 'Variant',
-    brand: asText(raw.brand),
-    unit: asText(raw.unit) || asText(attributes.unit) || asText(attributes.Unit),
-    unitValue: asText(raw.unitValue) || asText(attributes.unitValue) || asText(attributes.UnitValue),
-    mrp: asNumber(raw.mrp),
-    sellingPrice: asNumber(raw.sellingPrice),
-    stockQuantity: asNumber(raw.stockQuantity),
-    thresholdQuantity: asNumber(raw.thresholdQuantity),
-    imageUrl: asHttpUrl(raw.imageUrl),
-    expiryDate: asText(raw.expiryDate),
-    shortDescription: asText(raw.shortDescription),
-    longDescription: asText(raw.longDescription),
-    gstSlab: asText(raw.gstSlab),
-    attributes,
-    active: raw.active !== false,
-  };
-};
-
-const normalizeProduct = (raw: any, extras?: { categoryId?: number; categoryName?: string; subCategoryId?: number; subCategoryName?: string }): CatalogProductItem | null => {
-  if (!raw || typeof raw !== 'object') return null;
-  const shopProductId = asNumber(raw.shopProductId, NaN);
-  if (isNaN(shopProductId)) return null;
-  const variantsSource = Array.isArray(raw.variants) ? raw.variants : [];
-  const attributeTypes = Array.isArray(raw.attributeTypes)
-    ? raw.attributeTypes.map((item: any) => asText(item)).filter(Boolean)
-    : [];
-  return {
-    shopProductId,
-    masterProductId: asNumber(raw.masterProductId),
-    categoryId: extras?.categoryId ?? (asNumber(raw.categoryId) || undefined),
-    subCategoryId: extras?.subCategoryId ?? (asNumber(raw.subCategoryId) || undefined),
-    subCategoryName: extras?.subCategoryName || asText(raw.subCategoryName),
-    productName: asText(raw.productName) || 'Product',
-    shortDescription: asText(raw.shortDescription),
-    longDescription: asText(raw.longDescription),
-    brand: asText(raw.brand),
-    imageUrl: asHttpUrl(raw.imageUrl),
-    mrp: asNumber(raw.mrp),
-    sellingPrice: asNumber(raw.sellingPrice),
-    stockQuantity: asNumber(raw.stockQuantity),
-    thresholdQuantity: asNumber(raw.thresholdQuantity),
-    unit: asText(raw.unit),
-    unitValue: asText(raw.unitValue),
-    expiryDate: asText(raw.expiryDate) || null,
-    categoryName: extras?.categoryName || asText(raw.categoryName),
-    hasVariants: !!raw.hasVariants || variantsSource.length > 0,
-    variants: variantsSource.map(normalizeVariant).filter((item: ProductVariantItem | null): item is ProductVariantItem => item !== null),
-    attributeTypes,
-    unlisted: !!raw.unlisted,
-    active: raw.active !== false,
-  };
-};
-
-const extractProductsFromCategoryPayload = (payload: any): CatalogProductItem[] => {
-  const source = unwrapCategoryObject(payload);
-  if (!source) return [];
-  const groups = Array.isArray(source) ? source : [source];
-  const products: CatalogProductItem[] = [];
-  groups.forEach((group: any) => {
-    if (!group) return;
-    const categoryId = asNumber(group.categoryId) || undefined;
-    const categoryName = asText(group.categoryName);
-    if (Array.isArray(group.subCategories)) {
-      group.subCategories.forEach((sub: any) => {
-        if (!sub || !Array.isArray(sub.products)) return;
-        const subCategoryId = asNumber(sub.subCategoryId) || undefined;
-        const subCategoryName = asText(sub.subCategoryName);
-        sub.products.forEach((prod: any) => {
-          const item = normalizeProduct(prod, { categoryId, categoryName, subCategoryId, subCategoryName });
-          if (item) products.push(item);
-        });
-      });
-    } else if (Array.isArray(group.products)) {
-      group.products.forEach((prod: any) => {
-        const item = normalizeProduct(prod, { categoryId, categoryName });
-        if (item) products.push(item);
-      });
+  useEffect(() => {
+    const storyIndex = storyProducts.findIndex((item) => item.shopProductId === product.shopProductId);
+    if (storyIndex >= 0) {
+      storyScrollRef.current?.scrollTo({ x: Math.max(0, storyIndex * 68 - 24), animated: true });
     }
-  });
-  return products;
-};
+  }, [product.shopProductId, storyProducts]);
 
-const collectSubCategories = (group: any): SubCategoryItem[] => {
-  if (!group || !Array.isArray(group.subCategories)) return [];
-  return group.subCategories.map((sub: any) => ({
-    subCategoryId: asNumber(sub?.subCategoryId),
-    subCategoryName: asText(sub?.subCategoryName) || 'General',
-    products: Array.isArray(sub?.products)
-      ? sub.products
-          .map((prod: any) => normalizeProduct(prod, {
-            categoryId: asNumber(group.categoryId) || undefined,
-            categoryName: asText(group.categoryName),
-            subCategoryId: asNumber(sub?.subCategoryId) || undefined,
-            subCategoryName: asText(sub?.subCategoryName),
-          }))
-          .filter((item: CatalogProductItem | null): item is CatalogProductItem => item !== null)
-      : [],
-  })).filter((sub: SubCategoryItem) => sub.subCategoryId > 0);
-};
-
-const buildVariantRequest = (variant: ProductVariantItem, fallbackBrand = '', fallbackExpiry = '') => {
-  const attributes = { ...(variant.attributes || {}) };
-  if (variant.unit && !attributes.unit) attributes.unit = variant.unit;
-  if (variant.unitValue && !attributes.unitValue) attributes.unitValue = variant.unitValue;
-  const payload: Record<string, any> = {
-    variantName: asText(variant.variantName) || 'Variant',
-    brand: asText(variant.brand) || asText(fallbackBrand),
-    mrp: asNumber(variant.mrp, asNumber(variant.sellingPrice)),
-    sellingPrice: asNumber(variant.sellingPrice),
-    stockQuantity: asNumber(variant.stockQuantity),
-    thresholdQuantity: asNumber(variant.thresholdQuantity),
-    expiryDate: asText(variant.expiryDate) || asText(fallbackExpiry),
+  const shareProduct = async () => {
+    try {
+      await Share.share({
+        message: `${title}${packLabel ? `\n${packLabel}` : ''}\n₹${selected?.sellingPrice ?? product.sellingPrice ?? 0}`,
+      });
+    } catch {
+      // user cancelled share
+    }
   };
-  if (variant.id) payload.id = variant.id;
-  if (asText(variant.shortDescription)) payload.shortDescription = asText(variant.shortDescription);
-  if (asText(variant.longDescription)) payload.longDescription = asText(variant.longDescription);
-  if (asText(variant.gstSlab)) payload.gstSlab = asText(variant.gstSlab);
-  if (asHttpUrl(variant.imageUrl)) payload.imageUrl = asHttpUrl(variant.imageUrl);
-  if (Object.keys(attributes).length > 0) payload.attributes = attributes;
-  return payload;
+
+  const exploreBrand = () => {
+    const brand = asText(product.brand).toLowerCase();
+    if (!brand) return;
+    const next = storyProducts.find((item) => item.shopProductId !== product.shopProductId && asText(item.brand).toLowerCase() === brand);
+    if (next) onSwitchProduct(next);
+  };
+
+  const onHeroScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const nextIndex = Math.round(event.nativeEvent.contentOffset.x / windowWidth);
+    if (nextIndex !== safeIndex && nextIndex >= 0 && nextIndex < options.length) {
+      onSelectVariant(nextIndex);
+    }
+  };
+
+  const bumpQty = (delta: number) => {
+    setQtyByVariant((prev) => {
+      const nextQty = Math.max(0, (prev[qtyKey] || 0) + delta);
+      return { ...prev, [qtyKey]: nextQty };
+    });
+  };
+
+  const renderHeroItem = ({ item }: { item: ProductVariantItem }) => {
+    const image = getVariantHeroImage(item, product);
+    return (
+      <View style={styles.pdpHeroPage}>
+        {image ? (
+          <Image source={{ uri: image }} style={styles.pdpHeroImage} />
+        ) : (
+          <View style={styles.pdpHeroFallback}>
+            <Text style={styles.pdpHeroFallbackText}>{(title || 'P').charAt(0).toUpperCase()}</Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.pdpOverlay} edges={['top', 'bottom']}>
+      <View style={styles.pdpCard}>
+        <View style={styles.pdpHero}>
+          <FlatList
+            ref={heroRef}
+            data={options}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={(item, index) => `hero_${product.shopProductId}_${item.id || index}`}
+            renderItem={renderHeroItem}
+            getItemLayout={(_, index) => ({ length: windowWidth, offset: windowWidth * index, index })}
+            onMomentumScrollEnd={onHeroScrollEnd}
+            extraData={safeIndex}
+          />
+          <TouchableOpacity style={styles.pdpHeroBtnLeft} onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2B1E1A" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <Path d="m6 9 6 6 6-6" />
+            </Svg>
+          </TouchableOpacity>
+          <View style={styles.pdpHeroBtnRow}>
+            <TouchableOpacity style={styles.pdpIconBtn} onPress={() => onToggleSave(product.shopProductId)}>
+              <Svg width="18" height="18" viewBox="0 0 24 24" fill={isSaved ? INSTAMART_BLUE : 'none'} stroke={isSaved ? INSTAMART_BLUE : '#2B1E1A'} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <Path d="m19 21-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+              </Svg>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.pdpIconBtn} onPress={shareProduct}>
+              <Svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2B1E1A" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <Path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+                <Path d="m16 6-4-4-4 4" />
+                <Path d="M12 2v13" />
+              </Svg>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.pdpHeroMeta} pointerEvents="box-none">
+            <View style={styles.pdpDots}>
+              {options.length > 1 ? options.map((variant, index) => (
+                <TouchableOpacity
+                  key={`dot_${product.shopProductId}_${variant.id || index}`}
+                  style={[styles.pdpDot, index === safeIndex && styles.pdpDotActive]}
+                  onPress={() => onSelectVariant(index)}
+                />
+              )) : null}
+            </View>
+            {stockLeft > 0 ? (
+              <View style={styles.pdpHeroBadge}>
+                <Text style={styles.pdpHeroBadgeText}>{stockLeft} LEFT</Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+
+        <ScrollView style={styles.pdpBody} showsVerticalScrollIndicator={false}>
+          {!!product.brand && (
+            <TouchableOpacity onPress={exploreBrand} activeOpacity={0.8}>
+              <Text style={styles.pdpBrandLink}>Explore all {product.brand} items ›</Text>
+            </TouchableOpacity>
+          )}
+          <Text style={styles.pdpTitle}>{title}</Text>
+          {!!description && <Text style={styles.pdpSubtitle}>{description}</Text>}
+          {!!attributeLabel && <Text style={styles.pdpAttr}>{attributeLabel}</Text>}
+
+          <ScrollView
+            ref={thumbScrollRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.pdpThumbRow}
+          >
+            {options.map((variant, index) => {
+              const thumb = getVariantHeroImage(variant, product);
+              const isActive = index === safeIndex;
+              return (
+                <TouchableOpacity
+                  key={`thumb_${product.shopProductId}_${variant.id || index}`}
+                  style={[styles.pdpThumb, isActive && styles.pdpThumbActive]}
+                  onPress={() => onSelectVariant(index)}
+                  activeOpacity={0.85}
+                >
+                  {thumb ? (
+                    <Image source={{ uri: thumb }} style={styles.pdpThumbImage} />
+                  ) : (
+                    <View style={styles.pdpThumbFallback}>
+                      <Text style={styles.pdpThumbFallbackText}>{(variant.variantName || 'V').charAt(0).toUpperCase()}</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </ScrollView>
+
+        <View style={styles.pdpFooter}>
+          <View>
+            <Text style={styles.pdpFooterPack}>{packLabel}</Text>
+            <View style={styles.pricingRowStack}>
+              <Text style={styles.pdpFooterPrice}>₹{selected?.sellingPrice ?? 0}</Text>
+              {selected?.mrp && selected.mrp > (selected.sellingPrice || 0) ? (
+                <Text style={styles.mrpCrossedVal}>₹{selected.mrp}</Text>
+              ) : null}
+            </View>
+          </View>
+          {qty > 0 ? (
+            <View style={styles.pdpQtyStepper}>
+              <TouchableOpacity style={styles.pdpQtyBtn} onPress={() => bumpQty(-1)} activeOpacity={0.85}>
+                <Text style={styles.pdpQtyBtnText}>−</Text>
+              </TouchableOpacity>
+              <Text style={styles.pdpQtyValue}>{qty}</Text>
+              <TouchableOpacity style={styles.pdpQtyBtn} onPress={() => bumpQty(1)} activeOpacity={0.85}>
+                <Text style={styles.pdpQtyBtnText}>+</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity style={styles.pdpAddBtn} onPress={() => bumpQty(1)} activeOpacity={0.85}>
+              <Text style={styles.pdpAddBtnText}>ADD</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      <View style={styles.pdpStoryBar}>
+        <ScrollView ref={storyScrollRef} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pdpStoryRow}>
+          {storyProducts.map((item) => {
+            const active = item.shopProductId === product.shopProductId;
+            const storyImage = asHttpUrl(item.imageUrl) || asHttpUrl(item.variants?.[0]?.imageUrl);
+            return (
+              <TouchableOpacity
+                key={`story_${item.shopProductId}`}
+                style={styles.pdpStoryItem}
+                onPress={() => onSwitchProduct(item)}
+                activeOpacity={0.85}
+              >
+                <View style={[styles.pdpStoryRing, active && styles.pdpStoryRingActive]}>
+                  {storyImage ? (
+                    <Image source={{ uri: storyImage }} style={styles.pdpStoryImage} />
+                  ) : (
+                    <View style={styles.pdpStoryFallback}>
+                      <Text style={styles.pdpStoryFallbackText}>{(item.productName || 'P').charAt(0).toUpperCase()}</Text>
+                    </View>
+                  )}
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+    </SafeAreaView>
+  );
 };
 
-const buildAttributeTypes = (productTypes?: string[], variants: ProductVariantItem[] = []): string[] => {
-  const fromProduct = (Array.isArray(productTypes) ? productTypes : []).map(asText).filter(Boolean);
-  if (fromProduct.length > 0) return fromProduct;
-  const keys = new Set<string>();
-  variants.forEach((variant) => {
-    Object.keys(variant.attributes || {}).forEach((key) => keys.add(key));
-    if (variant.unit) keys.add('unit');
-    if (variant.unitValue) keys.add('unitValue');
-  });
-  return Array.from(keys);
-};
-
-const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility, gridWidth }: { 
-  item: CatalogProductItem; 
+const ProductGridItem = React.memo(({ item, onOpenVariants, onEdit, onDelete, onToggleVisibility, gridWidth }: { 
+  item: CatalogProductItem;
+  onOpenVariants: (item: CatalogProductItem) => void;
   onEdit: (item: CatalogProductItem) => void; 
   onDelete: (id: number) => void;
   onToggleVisibility: (id: number, currentActiveState: boolean) => void;
@@ -293,7 +331,7 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
   return (
     <TouchableOpacity 
       style={[styles.productBlockContainer, { maxWidth: (gridWidth / 2) - 10 }, !isVisible && styles.inactiveCardOpacity]}
-      onPress={() => onEdit(item)}
+      onPress={() => onOpenVariants(item)}
       activeOpacity={0.85}
     >
       <View style={styles.topCardFloatingActionBar}>
@@ -339,8 +377,8 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
       </View>
 
       <View style={styles.blankImageSectionPlaceholder}>
-        {item.imageUrl && typeof item.imageUrl === 'string' && item.imageUrl.startsWith('http') ? (
-          <Image source={{ uri: item.imageUrl }} style={styles.catalogRenderedImage} />
+        {asHttpUrl(item.imageUrl) || asHttpUrl(item.variants?.[0]?.imageUrl) ? (
+          <Image source={{ uri: asHttpUrl(item.imageUrl) || asHttpUrl(item.variants?.[0]?.imageUrl) || '' }} style={styles.catalogRenderedImage} />
         ) : (
           <View style={styles.zeptoCoreAssetCircle}>
             <Text style={styles.assetFrameChar}>{safeName.charAt(0).toUpperCase()}</Text>
@@ -352,6 +390,9 @@ const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility
         <Text style={styles.brandMetaLabel} numberOfLines={1}>{safeBrand}</Text>
         <Text style={styles.productNameLabel} numberOfLines={2}>{safeName}</Text>
         <Text style={styles.unitScaleTag}>{safeUnitVal} {safeUnitType}</Text>
+        {item.hasVariants && Array.isArray(item.variants) && item.variants.length > 0 ? (
+          <Text style={styles.optionCountTag}>{item.variants.length} packs · tap to slide</Text>
+        ) : null}
         <View style={styles.pricingRowStack}>
           <Text style={styles.sellingPriceVal}>₹{item.sellingPrice ?? 0}</Text>
           <Text style={styles.mrpCrossedVal}>₹{item.mrp ?? 0}</Text>
@@ -365,6 +406,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const [serverGroups, setServerGroups] = useState<ServerCategoryGroup[]>([]);
   const [backendCategoryFilteredProducts, setBackendCategoryFilteredProducts] = useState<CatalogProductItem[] | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [catalogLoadError, setCatalogLoadError] = useState<string>('');
 
   const [categoriesList, setCategoriesList] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
@@ -375,6 +417,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   const [showSidebar, setShowSidebar] = useState<boolean>(false);
   const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
+  const [variantSheetProduct, setVariantSheetProduct] = useState<CatalogProductItem | null>(null);
+  const [selectedVariantIndex, setSelectedVariantIndex] = useState<number>(0);
+  const [savedProductIds, setSavedProductIds] = useState<Set<number>>(new Set());
   
   const [isEditingMode, setIsEditingMode] = useState<boolean>(false);
   const [targetEditProductId, setTargetEditProductId] = useState<number | null>(null);
@@ -433,36 +478,15 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   const syncInventoryFromServer = async (resolvedToken: string) => {
     setIsLoading(true);
+    setCatalogLoadError('');
     try {
       const response = await fetch(adminCatalogUrls.tree(), {
         method: 'GET',
         headers: catalogAuthHeaders(resolvedToken)
       });
 
-      if (!response.ok) {
-        setIsLoading(false);
-        return;
-      }
-
-      const responseText = await response.text();
-      const itemsData = parseJsonSafe(responseText);
-      if (itemsData == null) {
-        setIsLoading(false);
-        return;
-      }
-
-      const safeItems = unwrapCategoryList(itemsData);
-      const normalizedGroups: ServerCategoryGroup[] = safeItems.map((group: any) => {
-        const subCategories = collectSubCategories(group);
-        const extractedProducts = extractProductsFromCategoryPayload(group);
-
-        return {
-          categoryId: group?.categoryId,
-          categoryName: group?.categoryName ? String(group.categoryName) : 'General',
-          subCategories,
-          products: extractedProducts
-        };
-      });
+      const itemsData = await readCatalogJson(response);
+      const normalizedGroups = parseMyProductsTree(itemsData);
 
       setServerGroups(normalizedGroups);
       
@@ -488,20 +512,24 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           ? firstGroup.subCategories[0].subCategoryId
           : null;
         setSelectedSubCategoryId(firstSubId);
+        const treeProducts = Array.isArray(firstGroup?.products) ? firstGroup.products : [];
+        setBackendCategoryFilteredProducts(treeProducts);
         if (firstGroup && Array.isArray(firstGroup.subCategories) && firstGroup.subCategories.length > 0) {
-          fetchProductsForCategoryGroup(firstGroup, resolvedToken);
-        } else {
-          setBackendCategoryFilteredProducts(firstGroup?.products || []);
+          fetchProductsForCategoryGroup(firstGroup, resolvedToken, treeProducts);
         }
+      } else {
+        setBackendCategoryFilteredProducts([]);
       }
     } catch (err) {
+      const message = err instanceof CatalogApiError ? err.message : 'Could not load catalog products from the API.';
+      setCatalogLoadError(message);
       console.log("Sync error:", err);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const fetchProductsBySubCategory = async (subCategoryId: number, overrideToken?: string): Promise<CatalogProductItem[]> => {
+  const fetchProductsBySubCategory = useCallback(async (subCategoryId: number, overrideToken?: string): Promise<CatalogProductItem[]> => {
     try {
       const token = overrideToken || authToken || (await AsyncStorage.getItem('user_auth_token'));
       if (!token) return [];
@@ -511,18 +539,25 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         headers: catalogAuthHeaders(token.trim())
       });
 
-      if (!response.ok) return [];
-      const resText = await response.text();
-      return extractProductsFromCategoryPayload(parseJsonSafe(resText));
+      const payload = await readCatalogJson(response);
+      return extractProductsFromCategoryPayload(payload);
     } catch (error) {
+      console.log('Subcategory catalog fetch failed:', error);
       return [];
     }
-  };
+  }, [authToken]);
 
-  const fetchProductsForCategoryGroup = async (group: ServerCategoryGroup, overrideToken?: string) => {
+  const fetchProductsForCategoryGroup = async (
+    group: ServerCategoryGroup,
+    overrideToken?: string,
+    fallbackProducts?: CatalogProductItem[]
+  ) => {
+    const treeProducts = Array.isArray(fallbackProducts)
+      ? fallbackProducts
+      : (Array.isArray(group.products) ? group.products : []);
     const subCategories = Array.isArray(group.subCategories) ? group.subCategories : [];
     if (subCategories.length === 0) {
-      setBackendCategoryFilteredProducts(Array.isArray(group.products) ? group.products : []);
+      setBackendCategoryFilteredProducts(treeProducts);
       return;
     }
 
@@ -540,9 +575,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           }
         });
       });
-      setBackendCategoryFilteredProducts(merged);
+      setBackendCategoryFilteredProducts(merged.length > 0 ? merged : treeProducts);
     } catch (error) {
-      setBackendCategoryFilteredProducts(Array.isArray(group.products) ? group.products : []);
+      setBackendCategoryFilteredProducts(treeProducts);
     }
   };
 
@@ -555,8 +590,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     const firstSubId = subCategories.length > 0 ? subCategories[0].subCategoryId : null;
     setSelectedSubCategoryId(firstSubId);
     if (matchedGroup) {
-      setBackendCategoryFilteredProducts(Array.isArray(matchedGroup.products) ? matchedGroup.products : []);
-      fetchProductsForCategoryGroup(matchedGroup);
+      const treeProducts = Array.isArray(matchedGroup.products) ? matchedGroup.products : [];
+      setBackendCategoryFilteredProducts(treeProducts);
+      fetchProductsForCategoryGroup(matchedGroup, undefined, treeProducts);
     } else {
       setBackendCategoryFilteredProducts([]);
     }
@@ -591,6 +627,54 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       console.log("Visibility sync error:", error);
     }
   }, [authToken]);
+
+  const closeVariantSheet = useCallback(() => {
+    setVariantSheetProduct(null);
+    setSelectedVariantIndex(0);
+  }, []);
+
+  const mergeFreshProducts = useCallback((incoming: CatalogProductItem[]) => {
+    if (!incoming.length) return;
+    setBackendCategoryFilteredProducts((prev) => {
+      if (!Array.isArray(prev) || prev.length === 0) return incoming;
+      const byId = new Map(incoming.map((item) => [item.shopProductId, item]));
+      return prev.map((item) => byId.get(item.shopProductId) || item);
+    });
+  }, []);
+
+  const openVariantSheet = useCallback((item: CatalogProductItem) => {
+    if (!item) return;
+    setSelectedVariantIndex(0);
+    setVariantSheetProduct(item);
+    const subId = item.subCategoryId || selectedSubCategoryId;
+    if (!subId) return;
+    fetchProductsBySubCategory(subId).then((list) => {
+      if (!list.length) return;
+      mergeFreshProducts(list);
+      const fresh = findProductById(list, item.shopProductId);
+      if (!fresh) return;
+      setVariantSheetProduct((current) => (
+        current && current.shopProductId === fresh.shopProductId ? fresh : current
+      ));
+    });
+  }, [fetchProductsBySubCategory, mergeFreshProducts, selectedSubCategoryId]);
+
+  const selectVariantInSheet = useCallback((index: number) => {
+    setSelectedVariantIndex(index);
+  }, []);
+
+  const switchProductInSheet = useCallback((item: CatalogProductItem) => {
+    openVariantSheet(item);
+  }, [openVariantSheet]);
+
+  const toggleSavedProduct = useCallback((shopProductId: number) => {
+    setSavedProductIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(shopProductId)) next.delete(shopProductId);
+      else next.add(shopProductId);
+      return next;
+    });
+  }, []);
 
   const pickImageFromDeviceGallery = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -906,13 +990,14 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   const renderGridItem = useCallback(({ item }: { item: CatalogProductItem }) => (
     <ProductGridItem 
-      item={item} 
+      item={item}
+      onOpenVariants={openVariantSheet}
       onEdit={openProductForEditingAction} 
       onDelete={deleteProductItem} 
       onToggleVisibility={toggleProductVisibility}
       gridWidth={gridAvailableWidth}
     />
-  ), [openProductForEditingAction, deleteProductItem, toggleProductVisibility, gridAvailableWidth]);
+  ), [openVariantSheet, openProductForEditingAction, deleteProductItem, toggleProductVisibility, gridAvailableWidth]);
 
   const keyExtractor = useCallback((item: CatalogProductItem, index: number) => {
     if (item && item.shopProductId != null) {
@@ -984,7 +1069,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           ) : (!filteredGridProducts || filteredGridProducts.length === 0) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
               <Text style={{ fontSize: 13, color: '#5C4033', fontWeight: '700', textAlign: 'center' }}>
-                {safeCategories.length === 0 ? "Catalog is Empty" : "No products inside this catalog node"}
+                {catalogLoadError
+                  ? catalogLoadError
+                  : safeCategories.length === 0
+                    ? "No products returned from GET /v1/admin/catalog/my-products"
+                    : "No products inside this catalog node"}
               </Text>
             </View>
           ) : (
@@ -1184,6 +1273,26 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         </View>
       </Modal>
 
+      <Modal
+        transparent
+        visible={!!variantSheetProduct}
+        animationType="slide"
+        onRequestClose={closeVariantSheet}
+      >
+        {variantSheetProduct ? (
+          <ProductDetailPopup
+            product={variantSheetProduct}
+            products={filteredGridProducts}
+            selectedVariantIndex={selectedVariantIndex}
+            savedIds={savedProductIds}
+            onClose={closeVariantSheet}
+            onSelectVariant={selectVariantInSheet}
+            onSwitchProduct={switchProductInSheet}
+            onToggleSave={toggleSavedProduct}
+          />
+        ) : null}
+      </Modal>
+
       <BottomNavBar onNavigate={onNavigate} currentActive="category" />
     </SafeAreaView>
   );
@@ -1227,6 +1336,7 @@ const styles = StyleSheet.create({
   brandMetaLabel: { fontSize: 9, fontWeight: '700', color: '#A89685', textTransform: 'uppercase' },
   productNameLabel: { fontSize: 12.5, fontWeight: '700', color: '#2B1E1A', marginVertical: 2, height: 34 },
   unitScaleTag: { fontSize: 10.5, color: '#5C4033', fontWeight: '600', marginBottom: 4 },
+  optionCountTag: { fontSize: 10, color: '#D2691E', fontWeight: '800', marginBottom: 4 },
   pricingRowStack: { flexDirection: 'row', alignItems: 'center' },
   sellingPriceVal: { fontSize: 13, fontWeight: '800', color: '#2B1E1A', marginRight: 6 },
   mrpCrossedVal: { fontSize: 10, color: '#A89685', textDecorationLine: 'line-through' },
@@ -1255,4 +1365,145 @@ const styles = StyleSheet.create({
   miniVariantImageThumb: { width: 24, height: 24, borderRadius: 4, marginRight: 8, resizeMode: 'cover' },
   miniVariantText: { fontSize: 11, color: '#5C4033', flex: 1, fontWeight: '600' },
   miniVariantDeleteCross: { fontSize: 12, color: '#D2691E', fontWeight: '800', paddingHorizontal: 4 },
+  pdpOverlay: { flex: 1, backgroundColor: 'rgba(20, 16, 14, 0.72)', justifyContent: 'flex-end' },
+  pdpCard: {
+    flex: 1,
+    marginTop: 18,
+    marginHorizontal: 0,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 28,
+    overflow: 'hidden',
+  },
+  pdpHero: { height: HERO_HEIGHT, backgroundColor: '#FFFFFF', position: 'relative' },
+  pdpHeroPage: { width: windowWidth, height: HERO_HEIGHT, backgroundColor: '#FFFFFF' },
+  pdpHeroImage: { width: '100%', height: '100%', resizeMode: 'contain' },
+  pdpHeroFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF8F1' },
+  pdpHeroFallbackText: { fontSize: 64, fontWeight: '800', color: '#D2691E' },
+  pdpHeroBtnLeft: {
+    position: 'absolute',
+    top: 14,
+    left: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pdpHeroBtnRow: { position: 'absolute', top: 14, right: 14, flexDirection: 'row' },
+  pdpIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  pdpHeroMeta: {
+    position: 'absolute',
+    bottom: 10,
+    left: 12,
+    right: 12,
+    height: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pdpDots: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pdpDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(43,30,26,0.25)', marginHorizontal: 3 },
+  pdpDotActive: { backgroundColor: '#2B1E1A', width: 8, height: 8, borderRadius: 4 },
+  pdpHeroBadge: {
+    position: 'absolute',
+    right: 0,
+    backgroundColor: 'rgba(43,30,26,0.78)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  pdpHeroBadgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
+  pdpBody: { flex: 1, paddingHorizontal: 16, paddingTop: 14 },
+  pdpBrandLink: { fontSize: 13, fontWeight: '700', color: INSTAMART_BLUE, marginBottom: 8 },
+  pdpTitle: { fontSize: 22, fontWeight: '800', color: '#1A1A1A', lineHeight: 28 },
+  pdpSubtitle: { fontSize: 13, color: '#8A7A6A', fontWeight: '600', marginTop: 6 },
+  pdpAttr: { fontSize: 13, color: '#5C4033', fontWeight: '700', marginTop: 10, marginBottom: 12 },
+  pdpThumbRow: { paddingBottom: 16, paddingRight: 8 },
+  pdpThumb: {
+    width: VARIANT_THUMB_SIZE,
+    height: VARIANT_THUMB_SIZE,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#E8E8E8',
+    overflow: 'hidden',
+    marginRight: VARIANT_THUMB_GAP,
+    backgroundColor: '#F7F7F7',
+  },
+  pdpThumbActive: { borderColor: INSTAMART_BLUE, borderWidth: 2.5 },
+  pdpThumbImage: { width: '100%', height: '100%', resizeMode: 'contain' },
+  pdpThumbFallback: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  pdpThumbFallbackText: { fontSize: 16, fontWeight: '800', color: '#D2691E' },
+  pdpFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+    backgroundColor: '#FFFFFF',
+  },
+  pdpFooterPack: { fontSize: 12, fontWeight: '700', color: '#8A7A6A', marginBottom: 2 },
+  pdpFooterPrice: { fontSize: 22, fontWeight: '800', color: '#1A1A1A', marginRight: 8 },
+  pdpAddBtn: {
+    minWidth: 148,
+    height: 46,
+    borderRadius: 10,
+    backgroundColor: INSTAMART_BLUE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  pdpAddBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800', letterSpacing: 0.4 },
+  pdpQtyStepper: {
+    minWidth: 148,
+    height: 46,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: INSTAMART_BLUE,
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+  },
+  pdpQtyBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  pdpQtyBtnText: { color: INSTAMART_BLUE, fontSize: 22, fontWeight: '700', marginTop: -2 },
+  pdpQtyValue: { color: INSTAMART_BLUE, fontSize: 16, fontWeight: '800', minWidth: 24, textAlign: 'center' },
+  pdpStoryBar: { height: STORY_RAIL_HEIGHT, paddingTop: 10, paddingBottom: 14, backgroundColor: 'transparent' },
+  pdpStoryRow: { paddingHorizontal: 12, alignItems: 'center' },
+  pdpStoryItem: { marginRight: 10 },
+  pdpStoryRing: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    padding: 3,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  pdpStoryRingActive: { borderColor: '#FFFFFF' },
+  pdpStoryImage: { width: '100%', height: '100%', borderRadius: 26, resizeMode: 'cover' },
+  pdpStoryFallback: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 26,
+    backgroundColor: '#FFF5EA',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pdpStoryFallbackText: { fontSize: 16, fontWeight: '800', color: '#D2691E' },
 });

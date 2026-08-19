@@ -1,0 +1,118 @@
+import {
+  extractProductsFromCategoryPayload,
+  getProductVariantOptions,
+  getVariantAttributeLabel,
+  getVariantPackLabel,
+  getVariantTitle,
+  parseMyProductsTree,
+} from './adminCatalog';
+
+const assert = (condition: unknown, message: string) => {
+  if (!condition) throw new Error(message);
+};
+
+/** Exact GET /v1/admin/catalog/my-products shape: List<CategoryProductsResponse> */
+const liveTreePayload = [
+  {
+    categoryId: 4,
+    categoryName: 'Dairy',
+    subCategories: [
+      {
+        subCategoryId: 18,
+        subCategoryName: 'Ice Cream',
+        products: [
+          {
+            shopProductId: 101,
+            masterProductId: 55,
+            productName: 'Amul Vanilla Ice Cream Tub',
+            brand: 'Amul',
+            unit: 'ml',
+            unitValue: '700',
+            mrp: 180,
+            sellingPrice: 145,
+            stockQuantity: 24,
+            thresholdQuantity: 5,
+            imageUrl: 'https://cdn.example.com/amul-vanilla.png',
+            shortDescription: 'Rich & creamy milk ice cream',
+            expiryDate: '2026-12-01',
+            hasVariants: true,
+            active: true,
+            unlisted: false,
+            attributeTypes: ['Flavour'],
+            variants: [
+              {
+                id: 11,
+                variantName: 'Vanilla',
+                brand: 'Amul',
+                mrp: 180,
+                sellingPrice: 145,
+                stockQuantity: 12,
+                thresholdQuantity: 2,
+                imageUrl: 'https://cdn.example.com/vanilla.png',
+                expiryDate: '2026-12-01',
+                active: true,
+                attributes: { Flavour: 'Vanilla' },
+              },
+              {
+                id: 12,
+                variantName: 'Chocolate',
+                brand: 'Amul',
+                mrp: 190,
+                sellingPrice: 155,
+                stockQuantity: 12,
+                imageUrl: 'https://cdn.example.com/choco.png',
+                active: true,
+                attributes: { Flavour: 'Chocolate' },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+];
+
+const tree = parseMyProductsTree(liveTreePayload);
+assert(tree.length === 1, 'tree should have 1 category');
+assert(tree[0].categoryName === 'Dairy', 'categoryName mapping failed');
+assert(tree[0].subCategories?.[0].subCategoryId === 18, 'subCategoryId mapping failed');
+assert(tree[0].products.length === 1, 'tree products should come from subCategories[].products');
+
+const amul = tree[0].products[0];
+assert(amul.shopProductId === 101, 'shopProductId mapping failed');
+assert(amul.productName === 'Amul Vanilla Ice Cream Tub', 'productName mapping failed');
+assert(amul.variants.length === 2, 'variants from ShopProductResponse failed');
+assert(amul.variants[0].id === 11, 'variant id mapping failed');
+assert(amul.active === true, 'active flag mapping failed');
+
+const fromSubCategory = extractProductsFromCategoryPayload(liveTreePayload[0]);
+assert(fromSubCategory.length === 1, 'sub-category endpoint products failed');
+assert(fromSubCategory[0].shopProductId === 101, 'sub-category shopProductId failed');
+
+const options = getProductVariantOptions(amul);
+assert(options.length === 2, 'popup should show API variants');
+assert(getVariantTitle(options[0], amul) === amul.productName, 'title must stay the API productName');
+assert(getVariantAttributeLabel(options[0], amul) === 'Flavour: Vanilla', 'Flavour attribute from API failed');
+assert(getVariantPackLabel(options[0], amul) === '700 ml', 'pack should use parent unitValue+unit');
+assert(getVariantPackLabel(options[1], amul) === '700 ml', 'variant without unit should inherit parent pack');
+
+const hiddenProduct = extractProductsFromCategoryPayload({
+  categoryId: 1,
+  categoryName: 'Snacks',
+  subCategories: [{
+    subCategoryId: 2,
+    subCategoryName: 'Chips',
+    products: [{ shopProductId: 9, productName: 'Lays', isActive: false, sellingPrice: 20 }],
+  }],
+});
+assert(hiddenProduct[0]?.active === false, 'isActive:false from API should hide the card');
+
+const ignoredCategory = extractProductsFromCategoryPayload({
+  categoryId: 1,
+  categoryName: 'Dairy',
+  id: 1,
+  products: [],
+});
+assert(ignoredCategory.length === 0, 'empty category groups should not become products');
+
+console.log('catalog parse tests passed');
