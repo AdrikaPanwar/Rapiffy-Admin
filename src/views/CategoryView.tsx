@@ -18,6 +18,7 @@ import {
   Share,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
@@ -43,6 +44,8 @@ import {
   parseMyProductsTree,
   readCatalogJson,
   CatalogApiError,
+  resolveAttributeTypes,
+  buildAddVariantsBody,
   type CatalogProductItem,
   type ProductVariantItem,
   type ServerCategoryGroup,
@@ -68,24 +71,27 @@ interface ProductDetailPopupProps {
   products: CatalogProductItem[];
   selectedVariantIndex: number;
   savedIds: Set<number>;
+  isSavingVariant: boolean;
   onClose: () => void;
   onSelectVariant: (index: number) => void;
   onSwitchProduct: (item: CatalogProductItem) => void;
   onToggleSave: (id: number) => void;
+  onAddVariant: (product: CatalogProductItem, variant: ProductVariantItem) => Promise<boolean>;
+  onDeleteVariant: (product: CatalogProductItem, variant: ProductVariantItem) => Promise<void>;
 }
-
-const variantQtyKey = (shopProductId: number, variantId: number, index: number) =>
-  `${shopProductId}:${variantId || index}`;
 
 const ProductDetailPopup = ({
   product,
   products,
   selectedVariantIndex,
   savedIds,
+  isSavingVariant,
   onClose,
   onSelectVariant,
   onSwitchProduct,
   onToggleSave,
+  onAddVariant,
+  onDeleteVariant,
 }: ProductDetailPopupProps) => {
   const options = getProductVariantOptions(product);
   const safeIndex = selectedVariantIndex >= 0 && selectedVariantIndex < options.length ? selectedVariantIndex : 0;
@@ -97,12 +103,17 @@ const ProductDetailPopup = ({
   const isSaved = savedIds.has(product.shopProductId);
   const storyProducts = Array.isArray(products) ? products : [];
   const stockLeft = asNumber(selected?.stockQuantity);
+  const attributeTypes = resolveAttributeTypes(product);
   const thumbScrollRef = useRef<ScrollView>(null);
   const storyScrollRef = useRef<ScrollView>(null);
   const heroRef = useRef<FlatList<ProductVariantItem>>(null);
-  const [qtyByVariant, setQtyByVariant] = useState<Record<string, number>>({});
-  const qtyKey = variantQtyKey(product.shopProductId, selected?.id || 0, safeIndex);
-  const qty = qtyByVariant[qtyKey] || 0;
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newVariantName, setNewVariantName] = useState('');
+  const [newVariantPrice, setNewVariantPrice] = useState('');
+  const [newVariantMrp, setNewVariantMrp] = useState('');
+  const [newVariantStock, setNewVariantStock] = useState('0');
+  const [newVariantImage, setNewVariantImage] = useState<string | null>(null);
+  const [newAttributeValues, setNewAttributeValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     thumbScrollRef.current?.scrollTo({ x: Math.max(0, safeIndex) * VARIANT_THUMB_STEP, animated: true });
@@ -140,11 +151,70 @@ const ProductDetailPopup = ({
     }
   };
 
-  const bumpQty = (delta: number) => {
-    setQtyByVariant((prev) => {
-      const nextQty = Math.max(0, (prev[qtyKey] || 0) + delta);
-      return { ...prev, [qtyKey]: nextQty };
+  useEffect(() => {
+    setShowAddForm(false);
+    setNewVariantName('');
+    setNewVariantPrice('');
+    setNewVariantMrp('');
+    setNewVariantStock('0');
+    setNewVariantImage(null);
+    setNewAttributeValues({});
+  }, [product.shopProductId]);
+
+  const openAddVariantForm = () => {
+    setShowAddForm(true);
+    setNewVariantName('');
+    setNewVariantPrice(selected?.sellingPrice ? String(selected.sellingPrice) : '');
+    setNewVariantMrp(selected?.mrp ? String(selected.mrp) : '');
+    setNewVariantStock('0');
+    setNewVariantImage(asHttpUrl(product.imageUrl));
+    const seed: Record<string, string> = {};
+    attributeTypes.forEach((key) => { seed[key] = ''; });
+    setNewAttributeValues(seed);
+  };
+
+  const pickNewVariantImage = async () => {
+    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permissionResult.granted) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.6,
     });
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      setNewVariantImage(result.assets[0].uri);
+    }
+  };
+
+  const submitNewVariant = async () => {
+    if (!newVariantName.trim() || !newVariantPrice.trim()) {
+      Alert.alert('Fields missing', 'Enter variant name and selling price.');
+      return;
+    }
+    const attributes: Record<string, string> = {};
+    attributeTypes.forEach((key) => {
+      const value = asText(newAttributeValues[key]);
+      if (value) attributes[key] = value;
+    });
+    const primaryAttr = asText(newAttributeValues[attributeTypes[0]]);
+    const created: ProductVariantItem = {
+      id: 0,
+      variantName: newVariantName.trim(),
+      brand: product.brand || '',
+      unit: product.unit || '',
+      unitValue: product.unitValue || '',
+      mrp: parseFloat(newVariantMrp) || parseFloat(newVariantPrice) || 0,
+      sellingPrice: parseFloat(newVariantPrice) || 0,
+      stockQuantity: parseInt(newVariantStock, 10) || 0,
+      thresholdQuantity: 0,
+      imageUrl: asHttpUrl(newVariantImage) || product.imageUrl,
+      expiryDate: product.expiryDate || '2026-07-26',
+      shortDescription: product.shortDescription,
+      attributes: primaryAttr || Object.keys(attributes).length ? attributes : { [attributeTypes[0]]: newVariantName.trim() },
+    };
+    const ok = await onAddVariant(product, created);
+    if (ok) setShowAddForm(false);
   };
 
   const renderHeroItem = ({ item }: { item: ProductVariantItem }) => {
@@ -163,6 +233,7 @@ const ProductDetailPopup = ({
   };
 
   return (
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <SafeAreaView style={styles.pdpOverlay} edges={['top', 'bottom']}>
       <View style={styles.pdpCard}>
         <View style={styles.pdpHero}>
@@ -234,24 +305,81 @@ const ProductDetailPopup = ({
             {options.map((variant, index) => {
               const thumb = getVariantHeroImage(variant, product);
               const isActive = index === safeIndex;
+              const canDelete = asNumber(variant.id) > 0;
               return (
-                <TouchableOpacity
-                  key={`thumb_${product.shopProductId}_${variant.id || index}`}
-                  style={[styles.pdpThumb, isActive && styles.pdpThumbActive]}
-                  onPress={() => onSelectVariant(index)}
-                  activeOpacity={0.85}
-                >
-                  {thumb ? (
-                    <Image source={{ uri: thumb }} style={styles.pdpThumbImage} />
-                  ) : (
-                    <View style={styles.pdpThumbFallback}>
-                      <Text style={styles.pdpThumbFallbackText}>{(variant.variantName || 'V').charAt(0).toUpperCase()}</Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
+                <View key={`thumb_${product.shopProductId}_${variant.id || index}`} style={styles.pdpThumbWrap}>
+                  <TouchableOpacity
+                    style={[styles.pdpThumb, isActive && styles.pdpThumbActive]}
+                    onPress={() => onSelectVariant(index)}
+                    activeOpacity={0.85}
+                  >
+                    {thumb ? (
+                      <Image source={{ uri: thumb }} style={styles.pdpThumbImage} />
+                    ) : (
+                      <View style={styles.pdpThumbFallback}>
+                        <Text style={styles.pdpThumbFallbackText}>{(variant.variantName || 'V').charAt(0).toUpperCase()}</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                  {canDelete ? (
+                    <TouchableOpacity
+                      style={styles.pdpThumbDelete}
+                      onPress={() => onDeleteVariant(product, variant)}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <Text style={styles.pdpThumbDeleteText}>×</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
               );
             })}
+            <TouchableOpacity style={styles.pdpThumbAdd} onPress={openAddVariantForm} activeOpacity={0.85}>
+              <Text style={styles.pdpThumbAddText}>+</Text>
+            </TouchableOpacity>
           </ScrollView>
+
+          {showAddForm ? (
+            <View style={styles.pdpAddForm}>
+              <Text style={styles.pdpAddFormTitle}>Add a variant</Text>
+              <Text style={styles.inputLabelField}>Variant name *</Text>
+              <TextInput
+                style={styles.customTextInputRow}
+                placeholder="e.g. Chocolate"
+                value={newVariantName}
+                onChangeText={setNewVariantName}
+              />
+              {attributeTypes.map((attrKey) => (
+                <View key={`attr_${attrKey}`}>
+                  <Text style={styles.inputLabelField}>{attrKey}</Text>
+                  <TextInput
+                    style={styles.customTextInputRow}
+                    placeholder={attrKey}
+                    value={newAttributeValues[attrKey] || ''}
+                    onChangeText={(text) => setNewAttributeValues((prev) => ({ ...prev, [attrKey]: text }))}
+                  />
+                </View>
+              ))}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <View style={{ flex: 0.48 }}>
+                  <Text style={styles.inputLabelField}>Selling price *</Text>
+                  <TextInput style={styles.customTextInputRow} placeholder="145" keyboardType="numeric" value={newVariantPrice} onChangeText={setNewVariantPrice} />
+                </View>
+                <View style={{ flex: 0.48 }}>
+                  <Text style={styles.inputLabelField}>MRP</Text>
+                  <TextInput style={styles.customTextInputRow} placeholder="180" keyboardType="numeric" value={newVariantMrp} onChangeText={setNewVariantMrp} />
+                </View>
+              </View>
+              <Text style={styles.inputLabelField}>Stock qty</Text>
+              <TextInput style={styles.customTextInputRow} placeholder="0" keyboardType="numeric" value={newVariantStock} onChangeText={setNewVariantStock} />
+              <TouchableOpacity style={styles.variantImagePreviewContainer} onPress={pickNewVariantImage}>
+                {asHttpUrl(newVariantImage) ? (
+                  <Image source={{ uri: asHttpUrl(newVariantImage) || '' }} style={styles.fullPreviewTargetImage} />
+                ) : (
+                  <Text style={styles.photoTriggerBtnLabel}>Tap to add variant image</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </ScrollView>
 
         <View style={styles.pdpFooter}>
@@ -264,19 +392,18 @@ const ProductDetailPopup = ({
               ) : null}
             </View>
           </View>
-          {qty > 0 ? (
-            <View style={styles.pdpQtyStepper}>
-              <TouchableOpacity style={styles.pdpQtyBtn} onPress={() => bumpQty(-1)} activeOpacity={0.85}>
-                <Text style={styles.pdpQtyBtnText}>−</Text>
+          {showAddForm ? (
+            <View style={styles.pdpFooterActions}>
+              <TouchableOpacity style={styles.pdpCancelBtn} onPress={() => setShowAddForm(false)} disabled={isSavingVariant}>
+                <Text style={styles.pdpCancelBtnText}>CANCEL</Text>
               </TouchableOpacity>
-              <Text style={styles.pdpQtyValue}>{qty}</Text>
-              <TouchableOpacity style={styles.pdpQtyBtn} onPress={() => bumpQty(1)} activeOpacity={0.85}>
-                <Text style={styles.pdpQtyBtnText}>+</Text>
+              <TouchableOpacity style={styles.pdpAddBtn} onPress={submitNewVariant} disabled={isSavingVariant} activeOpacity={0.85}>
+                {isSavingVariant ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.pdpAddBtnText}>SAVE</Text>}
               </TouchableOpacity>
             </View>
           ) : (
-            <TouchableOpacity style={styles.pdpAddBtn} onPress={() => bumpQty(1)} activeOpacity={0.85}>
-              <Text style={styles.pdpAddBtnText}>ADD</Text>
+            <TouchableOpacity style={styles.pdpAddBtn} onPress={openAddVariantForm} activeOpacity={0.85}>
+              <Text style={styles.pdpAddBtnText}>ADD VARIANT</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -309,6 +436,7 @@ const ProductDetailPopup = ({
         </ScrollView>
       </View>
     </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -420,6 +548,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const [variantSheetProduct, setVariantSheetProduct] = useState<CatalogProductItem | null>(null);
   const [selectedVariantIndex, setSelectedVariantIndex] = useState<number>(0);
   const [savedProductIds, setSavedProductIds] = useState<Set<number>>(new Set());
+  const [isSavingVariant, setIsSavingVariant] = useState(false);
   
   const [isEditingMode, setIsEditingMode] = useState<boolean>(false);
   const [targetEditProductId, setTargetEditProductId] = useState<number | null>(null);
@@ -658,6 +787,90 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       ));
     });
   }, [fetchProductsBySubCategory, mergeFreshProducts, selectedSubCategoryId]);
+
+  const refreshOpenedProduct = useCallback(async (shopProductId: number, subCategoryId?: number) => {
+    const subId = subCategoryId || selectedSubCategoryId;
+    if (!subId) return null;
+    const list = await fetchProductsBySubCategory(subId);
+    if (!list.length) return null;
+    mergeFreshProducts(list);
+    const fresh = findProductById(list, shopProductId);
+    if (fresh) {
+      setVariantSheetProduct((current) => (
+        current && current.shopProductId === fresh.shopProductId ? fresh : current
+      ));
+    }
+    return fresh;
+  }, [fetchProductsBySubCategory, mergeFreshProducts, selectedSubCategoryId]);
+
+  const addVariantFromPopup = useCallback(async (product: CatalogProductItem, variant: ProductVariantItem): Promise<boolean> => {
+    const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
+    if (!fastToken) {
+      Alert.alert('Login required', 'Sign in again to add a variant.');
+      return false;
+    }
+    setIsSavingVariant(true);
+    try {
+      const headers = catalogAuthHeaders(fastToken.trim(), true);
+      if (!product.hasVariants) {
+        const enableResponse = await fetch(adminCatalogUrls.updateProduct(product.shopProductId), {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({
+            hasVariants: true,
+            attributeTypes: resolveAttributeTypes(product),
+          }),
+        });
+        await readCatalogJson(enableResponse);
+      }
+
+      const addResponse = await fetch(adminCatalogUrls.addVariants(), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(buildAddVariantsBody(product, variant)),
+      });
+      await readCatalogJson(addResponse);
+      const fresh = await refreshOpenedProduct(product.shopProductId, product.subCategoryId);
+      if (fresh && Array.isArray(fresh.variants) && fresh.variants.length > 0) {
+        setSelectedVariantIndex(fresh.variants.length - 1);
+      }
+      return true;
+    } catch (error) {
+      const message = error instanceof CatalogApiError ? error.message : 'Could not add this variant.';
+      Alert.alert('Variant not saved', message);
+      return false;
+    } finally {
+      setIsSavingVariant(false);
+    }
+  }, [authToken, refreshOpenedProduct]);
+
+  const deleteVariantFromPopup = useCallback(async (product: CatalogProductItem, variant: ProductVariantItem) => {
+    const variantId = asNumber(variant.id);
+    if (variantId <= 0) return;
+    const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
+    if (!fastToken) return;
+    Alert.alert('Delete variant', `Remove ${variant.variantName}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const response = await fetch(adminCatalogUrls.deleteVariant(variantId), {
+              method: 'DELETE',
+              headers: catalogAuthHeaders(fastToken.trim()),
+            });
+            await readCatalogJson(response);
+            setSelectedVariantIndex(0);
+            await refreshOpenedProduct(product.shopProductId, product.subCategoryId);
+          } catch (error) {
+            const message = error instanceof CatalogApiError ? error.message : 'Could not delete this variant.';
+            Alert.alert('Delete failed', message);
+          }
+        },
+      },
+    ]);
+  }, [authToken, refreshOpenedProduct]);
 
   const selectVariantInSheet = useCallback((index: number) => {
     setSelectedVariantIndex(index);
@@ -1289,6 +1502,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
             onSelectVariant={selectVariantInSheet}
             onSwitchProduct={switchProductInSheet}
             onToggleSave={toggleSavedProduct}
+            isSavingVariant={isSavingVariant}
+            onAddVariant={addVariantFromPopup}
+            onDeleteVariant={deleteVariantFromPopup}
           />
         ) : null}
       </Modal>
@@ -1431,7 +1647,8 @@ const styles = StyleSheet.create({
   pdpTitle: { fontSize: 22, fontWeight: '800', color: '#1A1A1A', lineHeight: 28 },
   pdpSubtitle: { fontSize: 13, color: '#8A7A6A', fontWeight: '600', marginTop: 6 },
   pdpAttr: { fontSize: 13, color: '#5C4033', fontWeight: '700', marginTop: 10, marginBottom: 12 },
-  pdpThumbRow: { paddingBottom: 16, paddingRight: 8 },
+  pdpThumbRow: { paddingBottom: 16, paddingRight: 8, alignItems: 'flex-start' },
+  pdpThumbWrap: { marginRight: VARIANT_THUMB_GAP, position: 'relative' },
   pdpThumb: {
     width: VARIANT_THUMB_SIZE,
     height: VARIANT_THUMB_SIZE,
@@ -1439,13 +1656,38 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#E8E8E8',
     overflow: 'hidden',
-    marginRight: VARIANT_THUMB_GAP,
     backgroundColor: '#F7F7F7',
   },
   pdpThumbActive: { borderColor: INSTAMART_BLUE, borderWidth: 2.5 },
   pdpThumbImage: { width: '100%', height: '100%', resizeMode: 'contain' },
   pdpThumbFallback: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   pdpThumbFallbackText: { fontSize: 16, fontWeight: '800', color: '#D2691E' },
+  pdpThumbDelete: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#2B1E1A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pdpThumbDeleteText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800', marginTop: -1 },
+  pdpThumbAdd: {
+    width: VARIANT_THUMB_SIZE,
+    height: VARIANT_THUMB_SIZE,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: INSTAMART_BLUE,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F4F8FF',
+  },
+  pdpThumbAddText: { color: INSTAMART_BLUE, fontSize: 28, fontWeight: '700', marginTop: -2 },
+  pdpAddForm: { paddingBottom: 12 },
+  pdpAddFormTitle: { fontSize: 14, fontWeight: '800', color: '#2B1E1A', marginBottom: 4 },
   pdpFooter: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1459,31 +1701,28 @@ const styles = StyleSheet.create({
   },
   pdpFooterPack: { fontSize: 12, fontWeight: '700', color: '#8A7A6A', marginBottom: 2 },
   pdpFooterPrice: { fontSize: 22, fontWeight: '800', color: '#1A1A1A', marginRight: 8 },
+  pdpFooterActions: { flexDirection: 'row', alignItems: 'center' },
+  pdpCancelBtn: {
+    height: 46,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#D9C8B6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    marginRight: 8,
+  },
+  pdpCancelBtnText: { color: '#5C4033', fontSize: 12, fontWeight: '800' },
   pdpAddBtn: {
-    minWidth: 148,
+    minWidth: 132,
     height: 46,
     borderRadius: 10,
     backgroundColor: INSTAMART_BLUE,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 28,
+    paddingHorizontal: 16,
   },
-  pdpAddBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800', letterSpacing: 0.4 },
-  pdpQtyStepper: {
-    minWidth: 148,
-    height: 46,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: INSTAMART_BLUE,
-    backgroundColor: '#FFFFFF',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 8,
-  },
-  pdpQtyBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  pdpQtyBtnText: { color: INSTAMART_BLUE, fontSize: 22, fontWeight: '700', marginTop: -2 },
-  pdpQtyValue: { color: INSTAMART_BLUE, fontSize: 16, fontWeight: '800', minWidth: 24, textAlign: 'center' },
+  pdpAddBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800', letterSpacing: 0.3 },
   pdpStoryBar: { height: STORY_RAIL_HEIGHT, paddingTop: 10, paddingBottom: 14, backgroundColor: 'transparent' },
   pdpStoryRow: { paddingHorizontal: 12, alignItems: 'center' },
   pdpStoryItem: { marginRight: 10 },
