@@ -358,8 +358,9 @@ const TRACK_LINE_SPAN_PCT = 100 - 100 / TRACK_STEPS.length;
 const getTrackLineWidthPct = (rank: number, blocked: boolean): number => {
   if (blocked) return 0;
   const filled = Math.max(0, Math.min(rank, TRACK_STEPS.length));
-  if (filled <= 1) return 0;
-  return TRACK_LINE_SPAN_PCT * ((filled - 1) / (TRACK_STEPS.length - 1));
+  if (filled <= 0) return 0;
+  const segmentsReached = Math.min(filled, TRACK_STEPS.length - 1);
+  return TRACK_LINE_SPAN_PCT * (segmentsReached / (TRACK_STEPS.length - 1));
 };
 
 const preferStatus = (current: string, incoming: string): string => {
