@@ -351,6 +351,20 @@ const getStatusRank = (status: string): number => {
   return STATUS_RANK[key] ?? 0;
 };
 
+const TRACK_DOT_SIZE = 26;
+const TRACK_LINE_THICKNESS = 3;
+const TRACK_LINE_TOP = (TRACK_DOT_SIZE - TRACK_LINE_THICKNESS) / 2;
+const TRACK_LINE_START_PCT = 100 / TRACK_STEPS.length / 2;
+const TRACK_LINE_SPAN_PCT = 100 - 100 / TRACK_STEPS.length;
+
+const getTrackLineWidthPct = (rank: number, blocked: boolean): number => {
+  if (blocked) return 0;
+  const filled = Math.max(0, Math.min(rank, TRACK_STEPS.length));
+  if (filled <= 0) return 0;
+  const segmentsReached = Math.min(filled, TRACK_STEPS.length - 1);
+  return TRACK_LINE_SPAN_PCT * (segmentsReached / (TRACK_STEPS.length - 1));
+};
+
 const preferStatus = (current: string, incoming: string): string => {
   const cur = String(current || '').toUpperCase();
   const next = String(incoming || '').toUpperCase();
@@ -388,6 +402,7 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
   const rank = getStatusRank(status);
   const blocked = rank < 0;
   const nextAction = getNextAction(status);
+  const lineWidthPct = getTrackLineWidthPct(rank, blocked);
 
   return (
     <View style={[styles.trackBox, compact && styles.trackBoxCompact]}>
@@ -396,14 +411,17 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
         <Text style={styles.trackOwnerHint}>You mark each step here. The customer app shows the same status.</Text>
       )}
       <View style={styles.trackRow}>
+        <View pointerEvents="none" style={styles.trackLineLayer}>
+          <View style={[styles.trackBaseLine, { left: `${TRACK_LINE_START_PCT}%`, width: `${TRACK_LINE_SPAN_PCT}%` }]} />
+          {lineWidthPct > 0 ? (
+            <View style={[styles.trackProgressLine, { left: `${TRACK_LINE_START_PCT}%`, width: `${lineWidthPct}%` }]} />
+          ) : null}
+        </View>
         {TRACK_STEPS.map((step, index) => {
           const stepRank = index + 1;
           const done = !blocked && rank >= stepRank;
-          const stepAction = blocked ? null : getStepAction(status, step.key);
-          const action = stepAction;
-          const isNext = Boolean(stepAction);
-          const leftOn = index > 0 && !blocked && rank >= index;
-          const rightOn = index < TRACK_STEPS.length - 1 && !blocked && rank > stepRank;
+          const action = blocked ? null : getStepAction(status, step.key);
+          const isNext = Boolean(action);
 
           return (
             <TouchableOpacity
@@ -419,13 +437,11 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
               activeOpacity={action ? 0.7 : 1}
             >
               <View style={styles.trackDotRow}>
-                <View style={[styles.trackLine, index === 0 && styles.trackLineHidden, leftOn ? styles.trackLineOn : styles.trackLineOff]} />
                 <View
                   style={[
                     styles.trackDot,
                     done && styles.trackDotDone,
                     isNext && styles.trackDotNext,
-                    isNext && !done && styles.trackDotTappable,
                     !done && !isNext && styles.trackDotIdle,
                   ]}
                 >
@@ -435,7 +451,6 @@ const OrderStatusTracker = ({ status, busy = false, compact = false, onAdvance }
                     <TrackCheckIcon />
                   ) : null}
                 </View>
-                <View style={[styles.trackLine, index === TRACK_STEPS.length - 1 && styles.trackLineHidden, rightOn ? styles.trackLineOn : styles.trackLineOff]} />
               </View>
               <Text
                 style={[
@@ -1526,38 +1541,49 @@ const styles = StyleSheet.create({
   trackRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
+    position: 'relative',
+  },
+  trackLineLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: TRACK_DOT_SIZE,
+  },
+  trackBaseLine: {
+    position: 'absolute',
+    top: TRACK_LINE_TOP,
+    height: TRACK_LINE_THICKNESS,
+    borderRadius: 2,
+    backgroundColor: '#E6D4BF',
+  },
+  trackProgressLine: {
+    position: 'absolute',
+    top: TRACK_LINE_TOP,
+    height: TRACK_LINE_THICKNESS,
+    borderRadius: 2,
+    backgroundColor: '#2E7D32',
   },
   trackStep: {
     flex: 1,
     alignItems: 'center',
+    zIndex: 1,
   },
   trackDotRow: {
     width: '100%',
-    flexDirection: 'row',
+    height: TRACK_DOT_SIZE,
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 6,
   },
-  trackLine: {
-    flex: 1,
-    height: 3,
-    borderRadius: 2,
-  },
-  trackLineHidden: {
-    opacity: 0,
-  },
-  trackLineOn: {
-    backgroundColor: '#2E7D32',
-  },
-  trackLineOff: {
-    backgroundColor: '#E6D4BF',
-  },
   trackDot: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    width: TRACK_DOT_SIZE,
+    height: TRACK_DOT_SIZE,
+    borderRadius: TRACK_DOT_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
+    backgroundColor: '#FFFFFF',
   },
   trackDotDone: {
     backgroundColor: '#2E7D32',
@@ -1566,11 +1592,6 @@ const styles = StyleSheet.create({
   trackDotNext: {
     backgroundColor: '#D2691E',
     borderColor: '#D2691E',
-  },
-  trackDotTappable: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
   },
   trackDotIdle: {
     backgroundColor: '#FFFFFF',
