@@ -21,9 +21,9 @@ import Svg, { Path } from 'react-native-svg';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BottomNavBar } from '../components/BottomNavBar';
+import { adminCatalogUrls, catalogAuthHeaders } from '../api/adminCatalog';
 
 const { width: windowWidth } = Dimensions.get('window');
-const BASE_URL = "https://rapiffy-backend-1.onrender.com";
 
 export interface ProductVariantItem {
   id: number;
@@ -37,12 +37,19 @@ export interface ProductVariantItem {
   thresholdQuantity: number;
   imageUrl: string | null; 
   expiryDate: string;
+  shortDescription?: string;
+  longDescription?: string;
+  gstSlab?: string;
+  attributes?: Record<string, string>;
+  active?: boolean;
 }
 
 export interface CatalogProductItem {
   shopProductId: number;
   masterProductId: number;
   categoryId?: number;
+  subCategoryId?: number;
+  subCategoryName?: string;
   productName: string;
   shortDescription: string;
   longDescription: string;
@@ -58,6 +65,7 @@ export interface CatalogProductItem {
   categoryName: string; 
   hasVariants: boolean;
   variants: ProductVariantItem[];
+  attributeTypes?: string[];
   unlisted?: boolean;
   active?: boolean;
 }
@@ -79,6 +87,193 @@ export interface CategoryViewProps {
   onNavigate?: (screen: 'login' | 'forgot_password' | 'home' | 'category' | 'coverage' | 'order' | 'profile') => void;
   authToken?: string; 
 }
+
+const asText = (value: any): string => {
+  const text = String(value ?? '').trim();
+  if (!text || text === 'string') return '';
+  return text;
+};
+
+const asHttpUrl = (value: any): string | null => {
+  const text = asText(value);
+  return text.startsWith('http') ? text : null;
+};
+
+const asNumber = (value: any, fallback = 0): number => {
+  const n = Number(value);
+  return isNaN(n) ? fallback : n;
+};
+
+const asAttributeMap = (raw: any): Record<string, string> => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const mapped: Record<string, string> = {};
+  Object.keys(raw).forEach((key) => {
+    const val = asText(raw[key]);
+    if (val) mapped[key] = val;
+  });
+  return mapped;
+};
+
+const parseJsonSafe = (text: string): any => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
+
+const unwrapCategoryList = (payload: any): any[] => {
+  if (Array.isArray(payload)) return payload;
+  if (payload && Array.isArray(payload.data)) return payload.data;
+  if (payload && Array.isArray(payload.content)) return payload.content;
+  return [];
+};
+
+const unwrapCategoryObject = (payload: any): any => {
+  if (payload && typeof payload === 'object' && !Array.isArray(payload) && payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data)) {
+    return payload.data;
+  }
+  return payload;
+};
+
+const normalizeVariant = (raw: any): ProductVariantItem | null => {
+  if (!raw || typeof raw !== 'object') return null;
+  const attributes = asAttributeMap(raw.attributes);
+  return {
+    id: asNumber(raw.id ?? raw.variantId),
+    variantName: asText(raw.variantName) || 'Variant',
+    brand: asText(raw.brand),
+    unit: asText(raw.unit) || asText(attributes.unit) || asText(attributes.Unit),
+    unitValue: asText(raw.unitValue) || asText(attributes.unitValue) || asText(attributes.UnitValue),
+    mrp: asNumber(raw.mrp),
+    sellingPrice: asNumber(raw.sellingPrice),
+    stockQuantity: asNumber(raw.stockQuantity),
+    thresholdQuantity: asNumber(raw.thresholdQuantity),
+    imageUrl: asHttpUrl(raw.imageUrl),
+    expiryDate: asText(raw.expiryDate),
+    shortDescription: asText(raw.shortDescription),
+    longDescription: asText(raw.longDescription),
+    gstSlab: asText(raw.gstSlab),
+    attributes,
+    active: raw.active !== false,
+  };
+};
+
+const normalizeProduct = (raw: any, extras?: { categoryId?: number; categoryName?: string; subCategoryId?: number; subCategoryName?: string }): CatalogProductItem | null => {
+  if (!raw || typeof raw !== 'object') return null;
+  const shopProductId = asNumber(raw.shopProductId, NaN);
+  if (isNaN(shopProductId)) return null;
+  const variantsSource = Array.isArray(raw.variants) ? raw.variants : [];
+  const attributeTypes = Array.isArray(raw.attributeTypes)
+    ? raw.attributeTypes.map((item: any) => asText(item)).filter(Boolean)
+    : [];
+  return {
+    shopProductId,
+    masterProductId: asNumber(raw.masterProductId),
+    categoryId: extras?.categoryId ?? (asNumber(raw.categoryId) || undefined),
+    subCategoryId: extras?.subCategoryId ?? (asNumber(raw.subCategoryId) || undefined),
+    subCategoryName: extras?.subCategoryName || asText(raw.subCategoryName),
+    productName: asText(raw.productName) || 'Product',
+    shortDescription: asText(raw.shortDescription),
+    longDescription: asText(raw.longDescription),
+    brand: asText(raw.brand),
+    imageUrl: asHttpUrl(raw.imageUrl),
+    mrp: asNumber(raw.mrp),
+    sellingPrice: asNumber(raw.sellingPrice),
+    stockQuantity: asNumber(raw.stockQuantity),
+    thresholdQuantity: asNumber(raw.thresholdQuantity),
+    unit: asText(raw.unit),
+    unitValue: asText(raw.unitValue),
+    expiryDate: asText(raw.expiryDate) || null,
+    categoryName: extras?.categoryName || asText(raw.categoryName),
+    hasVariants: !!raw.hasVariants || variantsSource.length > 0,
+    variants: variantsSource.map(normalizeVariant).filter((item: ProductVariantItem | null): item is ProductVariantItem => item !== null),
+    attributeTypes,
+    unlisted: !!raw.unlisted,
+    active: raw.active !== false,
+  };
+};
+
+const extractProductsFromCategoryPayload = (payload: any): CatalogProductItem[] => {
+  const source = unwrapCategoryObject(payload);
+  if (!source) return [];
+  const groups = Array.isArray(source) ? source : [source];
+  const products: CatalogProductItem[] = [];
+  groups.forEach((group: any) => {
+    if (!group) return;
+    const categoryId = asNumber(group.categoryId) || undefined;
+    const categoryName = asText(group.categoryName);
+    if (Array.isArray(group.subCategories)) {
+      group.subCategories.forEach((sub: any) => {
+        if (!sub || !Array.isArray(sub.products)) return;
+        const subCategoryId = asNumber(sub.subCategoryId) || undefined;
+        const subCategoryName = asText(sub.subCategoryName);
+        sub.products.forEach((prod: any) => {
+          const item = normalizeProduct(prod, { categoryId, categoryName, subCategoryId, subCategoryName });
+          if (item) products.push(item);
+        });
+      });
+    } else if (Array.isArray(group.products)) {
+      group.products.forEach((prod: any) => {
+        const item = normalizeProduct(prod, { categoryId, categoryName });
+        if (item) products.push(item);
+      });
+    }
+  });
+  return products;
+};
+
+const collectSubCategories = (group: any): SubCategoryItem[] => {
+  if (!group || !Array.isArray(group.subCategories)) return [];
+  return group.subCategories.map((sub: any) => ({
+    subCategoryId: asNumber(sub?.subCategoryId),
+    subCategoryName: asText(sub?.subCategoryName) || 'General',
+    products: Array.isArray(sub?.products)
+      ? sub.products
+          .map((prod: any) => normalizeProduct(prod, {
+            categoryId: asNumber(group.categoryId) || undefined,
+            categoryName: asText(group.categoryName),
+            subCategoryId: asNumber(sub?.subCategoryId) || undefined,
+            subCategoryName: asText(sub?.subCategoryName),
+          }))
+          .filter((item: CatalogProductItem | null): item is CatalogProductItem => item !== null)
+      : [],
+  })).filter((sub: SubCategoryItem) => sub.subCategoryId > 0);
+};
+
+const buildVariantRequest = (variant: ProductVariantItem, fallbackBrand = '', fallbackExpiry = '') => {
+  const attributes = { ...(variant.attributes || {}) };
+  if (variant.unit && !attributes.unit) attributes.unit = variant.unit;
+  if (variant.unitValue && !attributes.unitValue) attributes.unitValue = variant.unitValue;
+  const payload: Record<string, any> = {
+    variantName: asText(variant.variantName) || 'Variant',
+    brand: asText(variant.brand) || asText(fallbackBrand),
+    mrp: asNumber(variant.mrp, asNumber(variant.sellingPrice)),
+    sellingPrice: asNumber(variant.sellingPrice),
+    stockQuantity: asNumber(variant.stockQuantity),
+    thresholdQuantity: asNumber(variant.thresholdQuantity),
+    expiryDate: asText(variant.expiryDate) || asText(fallbackExpiry),
+  };
+  if (variant.id) payload.id = variant.id;
+  if (asText(variant.shortDescription)) payload.shortDescription = asText(variant.shortDescription);
+  if (asText(variant.longDescription)) payload.longDescription = asText(variant.longDescription);
+  if (asText(variant.gstSlab)) payload.gstSlab = asText(variant.gstSlab);
+  if (asHttpUrl(variant.imageUrl)) payload.imageUrl = asHttpUrl(variant.imageUrl);
+  if (Object.keys(attributes).length > 0) payload.attributes = attributes;
+  return payload;
+};
+
+const buildAttributeTypes = (productTypes?: string[], variants: ProductVariantItem[] = []): string[] => {
+  const fromProduct = (Array.isArray(productTypes) ? productTypes : []).map(asText).filter(Boolean);
+  if (fromProduct.length > 0) return fromProduct;
+  const keys = new Set<string>();
+  variants.forEach((variant) => {
+    Object.keys(variant.attributes || {}).forEach((key) => keys.add(key));
+    if (variant.unit) keys.add('unit');
+    if (variant.unitValue) keys.add('unitValue');
+  });
+  return Array.from(keys);
+};
 
 const ProductGridItem = React.memo(({ item, onEdit, onDelete, onToggleVisibility, gridWidth }: { 
   item: CatalogProductItem; 
@@ -174,6 +369,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const [categoriesList, setCategoriesList] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [categoryMetadataMap, setCategoryMetadataMap] = useState<Record<string, number>>({});
+  const [selectedSubCategoryId, setSelectedSubCategoryId] = useState<number | null>(null);
+  const [removedVariantIds, setRemovedVariantIds] = useState<number[]>([]);
+  const [prodAttributeTypes, setProdAttributeTypes] = useState<string[]>([]);
 
   const [showSidebar, setShowSidebar] = useState<boolean>(false);
   const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
@@ -236,12 +434,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const syncInventoryFromServer = async (resolvedToken: string) => {
     setIsLoading(true);
     try {
-      const response = await fetch(`${BASE_URL}/v1/admin/catalog/my-products`, {
+      const response = await fetch(adminCatalogUrls.tree(), {
         method: 'GET',
-        headers: {
-          'accept': '*/*',
-          'Authorization': `Bearer ${resolvedToken}`
-        }
+        headers: catalogAuthHeaders(resolvedToken)
       });
 
       if (!response.ok) {
@@ -250,33 +445,21 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       }
 
       const responseText = await response.text();
-      let itemsData: any = [];
-      try {
-        itemsData = JSON.parse(responseText);
-      } catch (parseError) {
+      const itemsData = parseJsonSafe(responseText);
+      if (itemsData == null) {
         setIsLoading(false);
         return;
       }
 
-      const safeItems = Array.isArray(itemsData) ? itemsData : [];
+      const safeItems = unwrapCategoryList(itemsData);
       const normalizedGroups: ServerCategoryGroup[] = safeItems.map((group: any) => {
-        let extractedProducts: CatalogProductItem[] = [];
-
-        if (group) {
-          if (Array.isArray(group.subCategories)) {
-            group.subCategories.forEach((sub: any) => {
-              if (sub && Array.isArray(sub.products)) {
-                extractedProducts = [...extractedProducts, ...sub.products];
-              }
-            });
-          } else if (Array.isArray(group.products)) {
-            extractedProducts = group.products;
-          }
-        }
+        const subCategories = collectSubCategories(group);
+        const extractedProducts = extractProductsFromCategoryPayload(group);
 
         return {
           categoryId: group?.categoryId,
           categoryName: group?.categoryName ? String(group.categoryName) : 'General',
+          subCategories,
           products: extractedProducts
         };
       });
@@ -300,9 +483,15 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       if (extractedCategories.length > 0) {
         const firstCatName = String(extractedCategories[0]);
         setSelectedCategory(firstCatName);
-        const firstCatId = dynamicMap[firstCatName];
-        if (firstCatId) {
-          fetchCategoryByIdWithFallback(firstCatId, resolvedToken);
+        const firstGroup = normalizedGroups.find((group) => group.categoryName === firstCatName) || normalizedGroups[0];
+        const firstSubId = firstGroup?.subCategories && firstGroup.subCategories.length > 0
+          ? firstGroup.subCategories[0].subCategoryId
+          : null;
+        setSelectedSubCategoryId(firstSubId);
+        if (firstGroup && Array.isArray(firstGroup.subCategories) && firstGroup.subCategories.length > 0) {
+          fetchProductsForCategoryGroup(firstGroup, resolvedToken);
+        } else {
+          setBackendCategoryFilteredProducts(firstGroup?.products || []);
         }
       }
     } catch (err) {
@@ -312,52 +501,64 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     }
   };
 
-  const fetchCategoryByIdWithFallback = async (catId: number, overrideToken?: string) => {
+  const fetchProductsBySubCategory = async (subCategoryId: number, overrideToken?: string): Promise<CatalogProductItem[]> => {
     try {
       const token = overrideToken || authToken || (await AsyncStorage.getItem('user_auth_token'));
-      if (!token) return;
+      if (!token) return [];
 
-      const response = await fetch(`${BASE_URL}/v1/admin/catalog/my-products/${catId}`, {
+      const response = await fetch(adminCatalogUrls.bySubCategory(subCategoryId), {
         method: 'GET',
-        headers: {
-          'accept': '*/*',
-          'Authorization': `Bearer ${token.trim()}`
-        }
+        headers: catalogAuthHeaders(token.trim())
       });
 
-      if (response.ok) {
-        const resText = await response.text();
-        const data = JSON.parse(resText);
-        let extracted: CatalogProductItem[] = [];
-
-        if (data) {
-          if (Array.isArray(data.products)) {
-            extracted = data.products;
-          } else if (Array.isArray(data.subCategories)) {
-            data.subCategories.forEach((sub: any) => {
-              if (sub && Array.isArray(sub.products)) extracted = [...extracted, ...sub.products];
-            });
-          } else if (Array.isArray(data)) {
-            extracted = data;
-          }
-        }
-
-        setBackendCategoryFilteredProducts(extracted);
-      } else {
-        setBackendCategoryFilteredProducts(null);
-      }
+      if (!response.ok) return [];
+      const resText = await response.text();
+      return extractProductsFromCategoryPayload(parseJsonSafe(resText));
     } catch (error) {
-      setBackendCategoryFilteredProducts(null);
+      return [];
+    }
+  };
+
+  const fetchProductsForCategoryGroup = async (group: ServerCategoryGroup, overrideToken?: string) => {
+    const subCategories = Array.isArray(group.subCategories) ? group.subCategories : [];
+    if (subCategories.length === 0) {
+      setBackendCategoryFilteredProducts(Array.isArray(group.products) ? group.products : []);
+      return;
+    }
+
+    try {
+      const lists = await Promise.all(
+        subCategories.map((sub) => fetchProductsBySubCategory(sub.subCategoryId, overrideToken))
+      );
+      const merged: CatalogProductItem[] = [];
+      const seen = new Set<number>();
+      lists.forEach((list) => {
+        list.forEach((item) => {
+          if (!seen.has(item.shopProductId)) {
+            seen.add(item.shopProductId);
+            merged.push(item);
+          }
+        });
+      });
+      setBackendCategoryFilteredProducts(merged);
+    } catch (error) {
+      setBackendCategoryFilteredProducts(Array.isArray(group.products) ? group.products : []);
     }
   };
 
   const handleCategoryClick = (categoryName: string) => {
     setSelectedCategory(categoryName);
-    const catId = categoryMetadataMap[categoryName];
-    if (catId) {
-      fetchCategoryByIdWithFallback(catId);
+    const matchedGroup = (Array.isArray(serverGroups) ? serverGroups : []).find(
+      (group) => group && group.categoryName === categoryName
+    );
+    const subCategories = matchedGroup && Array.isArray(matchedGroup.subCategories) ? matchedGroup.subCategories : [];
+    const firstSubId = subCategories.length > 0 ? subCategories[0].subCategoryId : null;
+    setSelectedSubCategoryId(firstSubId);
+    if (matchedGroup) {
+      setBackendCategoryFilteredProducts(Array.isArray(matchedGroup.products) ? matchedGroup.products : []);
+      fetchProductsForCategoryGroup(matchedGroup);
     } else {
-      setBackendCategoryFilteredProducts(null);
+      setBackendCategoryFilteredProducts([]);
     }
   };
 
@@ -379,13 +580,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     );
 
     try {
-      await fetch(`${BASE_URL}/v1/admin/catalog/visibility/${shopProductId}?active=${nextActiveState}`, {
+      const response = await fetch(adminCatalogUrls.visibility(shopProductId, nextActiveState), {
         method: 'PATCH',
-        headers: {
-          'accept': '*/*',
-          'Authorization': `Bearer ${fastToken.trim()}`
-        }
+        headers: catalogAuthHeaders(fastToken.trim())
       });
+      if (!response.ok) {
+        console.log("Visibility sync error:", response.status);
+      }
     } catch (error) {
       console.log("Visibility sync error:", error);
     }
@@ -436,8 +637,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     setProdExpiryDate(item.expiryDate || '2026-07-26');
     setProdHasVariants(!!item.hasVariants || (Array.isArray(item.variants) && item.variants.length > 0));
     setProductImageTarget(item.imageUrl === "string" ? null : item.imageUrl);
+    setProdAttributeTypes(Array.isArray(item.attributeTypes) ? item.attributeTypes : []);
+    if (item.subCategoryId) {
+      setSelectedSubCategoryId(item.subCategoryId);
+    }
     
     setTempVariantsList(Array.isArray(item.variants) ? item.variants : []);
+    setRemovedVariantIds([]);
     setVariantImageTarget(null);
     
     InteractionManager.runAfterInteractions(() => {
@@ -472,6 +678,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     setVThresholdQty('0');
 
     setTempVariantsList([]);
+    setRemovedVariantIds([]);
+    setProdAttributeTypes([]);
     setIsEditingMode(false);
     setTargetEditProductId(null);
     setIsProductModalOpen(false);
@@ -486,65 +694,121 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
     const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
     if (!fastToken) return;
 
-    const resolvedCategoryId = categoryMetadataMap[selectedCategory] || 1;
-    const safeVariants = Array.isArray(tempVariantsList) ? tempVariantsList : [];
+    const matchedGroup = (Array.isArray(serverGroups) ? serverGroups : []).find(
+      (group) => group && group.categoryName === selectedCategory
+    );
+    const groupSubId = matchedGroup && Array.isArray(matchedGroup.subCategories) && matchedGroup.subCategories.length > 0
+      ? matchedGroup.subCategories[0].subCategoryId
+      : null;
+    const resolvedSubCategoryId = selectedSubCategoryId || groupSubId;
 
-    const itemPayload = {
-      categoryId: resolvedCategoryId,
+    if (!isEditingMode && !resolvedSubCategoryId) {
+      Alert.alert("Subcategory required", "Select a category that has a subcategory before adding a product.");
+      return;
+    }
+
+    const safeVariants = Array.isArray(tempVariantsList) ? tempVariantsList : [];
+    const existingVariants = safeVariants.filter((variant) => asNumber(variant.id) > 0);
+    const newVariants = safeVariants.filter((variant) => !variant.id || asNumber(variant.id) <= 0);
+    const attributeTypes = buildAttributeTypes(prodAttributeTypes, safeVariants);
+    const productImage = asHttpUrl(productImageTarget);
+
+    const productPayload: Record<string, any> = {
       productName: prodNameInput.trim(),
       sellingPrice: parseFloat(prodPriceInput) || 0,
-      stockQuantity: parseInt(prodStockQty) || 0,
-      shortDescription: prodShortDesc.trim() || 'string',
-      longDescription: prodLongDesc.trim() || 'string',
-      brand: prodBrandInput.trim() || 'string',
-      imageUrl: productImageTarget || "string", 
+      stockQuantity: parseInt(prodStockQty, 10) || 0,
+      shortDescription: prodShortDesc.trim(),
+      longDescription: prodLongDesc.trim(),
+      brand: prodBrandInput.trim(),
       mrp: parseFloat(prodMrpInput) || parseFloat(prodPriceInput) || 0,
-      thresholdQuantity: parseInt(prodThresholdQty) || 0,
-      unit: prodUnitType || 'string',
-      unitValue: prodUnitVal || 'string',
+      thresholdQuantity: parseInt(prodThresholdQty, 10) || 0,
+      unit: prodUnitType.trim(),
+      unitValue: prodUnitVal.trim(),
       expiryDate: prodExpiryDate || '2026-07-26',
       hasVariants: prodHasVariants || safeVariants.length > 0,
-      variants: (prodHasVariants || safeVariants.length > 0) ? safeVariants.map(v => ({
-        id: v.id || 0,
-        variantName: v.variantName || 'Variant',
-        brand: v.brand || prodBrandInput.trim() || 'string',
-        unit: v.unit || prodUnitType || 'string',
-        unitValue: v.unitValue || prodUnitVal || 'string',
-        mrp: v.mrp || v.sellingPrice || 0,
-        sellingPrice: v.sellingPrice || 0,
-        stockQuantity: v.stockQuantity || 0,
-        thresholdQuantity: v.thresholdQuantity || 0,
-        imageUrl: v.imageUrl || 'string',
-        expiryDate: v.expiryDate || '2026-07-26'
-      })) : []
     };
+    if (productImage) productPayload.imageUrl = productImage;
+    if (attributeTypes.length > 0) productPayload.attributeTypes = attributeTypes;
 
     setIsLoading(true);
     try {
-      let endpoint = `${BASE_URL}/v1/admin/catalog/add-unlisted`;
-      let reqMethod = 'POST';
+      const headers = catalogAuthHeaders(fastToken.trim(), true);
 
       if (isEditingMode && targetEditProductId !== null) {
-        endpoint = `${BASE_URL}/v1/admin/catalog/update/${targetEditProductId}`;
-        reqMethod = 'PUT';
+        for (const variantId of removedVariantIds) {
+          const deleteResponse = await fetch(adminCatalogUrls.deleteVariant(variantId), {
+            method: 'DELETE',
+            headers: catalogAuthHeaders(fastToken.trim()),
+          });
+          if (!deleteResponse.ok) {
+            const errBody = parseJsonSafe(await deleteResponse.text()) || {};
+            Alert.alert("Server Rejected", errBody.message || "Could not delete a variant.");
+            return;
+          }
+        }
+
+        const updatePayload = {
+          ...productPayload,
+          variants: existingVariants.map((variant) => buildVariantRequest(variant, prodBrandInput, prodExpiryDate)),
+        };
+        const updateResponse = await fetch(adminCatalogUrls.updateProduct(targetEditProductId), {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify(updatePayload),
+        });
+        if (!updateResponse.ok) {
+          const errBody = parseJsonSafe(await updateResponse.text()) || {};
+          Alert.alert("Server Rejected", errBody.message || "Failed to update product.");
+          return;
+        }
+
+        for (const variant of existingVariants) {
+          await fetch(adminCatalogUrls.updateVariant(variant.id), {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify(buildVariantRequest(variant, prodBrandInput, prodExpiryDate)),
+          });
+        }
+
+        if (newVariants.length > 0) {
+          const addVariantResponse = await fetch(adminCatalogUrls.addVariants(), {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              parentShopProductId: targetEditProductId,
+              attributeTypes: attributeTypes.length > 0 ? attributeTypes : ['Unit'],
+              variants: newVariants.map((variant) => buildVariantRequest(variant, prodBrandInput, prodExpiryDate)),
+            }),
+          });
+          if (!addVariantResponse.ok) {
+            const errBody = parseJsonSafe(await addVariantResponse.text()) || {};
+            Alert.alert("Server Rejected", errBody.message || "Product updated, but new variants were not added.");
+          }
+        }
+
+        syncInventoryFromServer(fastToken.trim());
+        closeFormAndWipeDataBuffers();
+        Alert.alert("Success", "Product updated successfully!");
+        return;
       }
 
-      const response = await fetch(endpoint, {
-        method: reqMethod,
-        headers: {
-          'accept': '*/*',
-          'Authorization': `Bearer ${fastToken.trim()}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(itemPayload)
+      const createPayload = {
+        ...productPayload,
+        subCategoryId: resolvedSubCategoryId,
+        variants: safeVariants.map((variant) => buildVariantRequest(variant, prodBrandInput, prodExpiryDate)),
+      };
+      const response = await fetch(adminCatalogUrls.addUnlisted(), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(createPayload),
       });
 
       if (response.status === 200 || response.status === 201) {
         syncInventoryFromServer(fastToken.trim());
         closeFormAndWipeDataBuffers();
-        Alert.alert("Success", isEditingMode ? "Product updated successfully!" : "Product added successfully!");
+        Alert.alert("Success", "Product added successfully!");
       } else {
-        const errBody = await response.json();
+        const errBody = parseJsonSafe(await response.text()) || {};
         Alert.alert("Server Rejected", errBody.message || "Failed to finalize catalog edits.");
       }
     } catch (err) {
@@ -565,31 +829,34 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       })));
       setBackendCategoryFilteredProducts(prev => (Array.isArray(prev) ? prev : []).filter(p => p.shopProductId !== idToDelete));
       
-      await fetch(`${BASE_URL}/v1/admin/catalog/deactivate/${idToDelete}`, {
-        method: 'PUT',
-        headers: {
-          'accept': '*/*',
-          'Authorization': `Bearer ${fastToken.trim()}`
-        }
+      await fetch(adminCatalogUrls.visibility(idToDelete, false), {
+        method: 'PATCH',
+        headers: catalogAuthHeaders(fastToken.trim())
       });
     } catch (err) {}
   }, [authToken]);
 
   const addVariantToTempList = useCallback(() => {
     if (!vNameInput.trim() || !vPriceInput.trim()) return;
+    const attributes: Record<string, string> = {};
+    const unitType = vUnitType.trim() || prodUnitType.trim();
+    const unitValue = vUnitVal.trim() || prodUnitVal.trim();
+    if (unitType) attributes.unit = unitType;
+    if (unitValue) attributes.unitValue = unitValue;
     
     setTempVariantsList(prev => [...(Array.isArray(prev) ? prev : []), {
       id: 0, 
       variantName: vNameInput.trim(),
-      brand: vBrandInput.trim() || prodBrandInput.trim() || 'string',
-      unit: vUnitType.trim() || prodUnitType || 'string',
-      unitValue: vUnitVal.trim() || prodUnitVal || 'string',
+      brand: vBrandInput.trim() || prodBrandInput.trim(),
+      unit: unitType,
+      unitValue: unitValue,
       mrp: parseFloat(vMrpInput) || parseFloat(prodMrpInput) || parseFloat(vPriceInput) || 0,
       sellingPrice: parseFloat(vPriceInput) || 0,
-      stockQuantity: parseInt(vStockQty) || 0,
-      thresholdQuantity: parseInt(vThresholdQty) || 0,
-      imageUrl: variantImageTarget || productImageTarget || 'string',
-      expiryDate: vExpiryDate || prodExpiryDate || '2026-07-26'
+      stockQuantity: parseInt(vStockQty, 10) || 0,
+      thresholdQuantity: parseInt(vThresholdQty, 10) || 0,
+      imageUrl: asHttpUrl(variantImageTarget) || asHttpUrl(productImageTarget),
+      expiryDate: vExpiryDate || prodExpiryDate || '2026-07-26',
+      attributes,
     }]);
 
     setVNameInput('');
@@ -605,7 +872,14 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   }, [vNameInput, vBrandInput, prodBrandInput, vUnitType, prodUnitType, vUnitVal, prodUnitVal, vMrpInput, prodMrpInput, vPriceInput, vStockQty, vThresholdQty, variantImageTarget, productImageTarget, vExpiryDate, prodExpiryDate]);
 
   const deleteVariantFromTempList = useCallback((indexToRemove: number) => {
-    setTempVariantsList(prev => (Array.isArray(prev) ? prev : []).filter((_, idx) => idx !== indexToRemove));
+    setTempVariantsList(prev => {
+      const list = Array.isArray(prev) ? prev : [];
+      const target = list[indexToRemove];
+      if (target && asNumber(target.id) > 0) {
+        setRemovedVariantIds((ids) => (ids.includes(target.id) ? ids : [...ids, target.id]));
+      }
+      return list.filter((_, idx) => idx !== indexToRemove);
+    });
   }, []);
 
   const safeCategories = Array.isArray(categoriesList) ? categoriesList : [];
