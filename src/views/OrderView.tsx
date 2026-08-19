@@ -352,6 +352,8 @@ const getStatusRank = (status: string): number => {
 };
 
 const TRACK_DOT_SIZE = 26;
+const TRACK_LINE_THICKNESS = 3;
+const TRACK_LINE_TOP = (TRACK_DOT_SIZE - TRACK_LINE_THICKNESS) / 2;
 const TRACK_LINE_START_PCT = 100 / TRACK_STEPS.length / 2;
 const TRACK_LINE_SPAN_PCT = 100 - 100 / TRACK_STEPS.length;
 
@@ -1547,17 +1549,18 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0,
     height: TRACK_DOT_SIZE,
-    justifyContent: 'center',
   },
   trackBaseLine: {
     position: 'absolute',
-    height: 3,
+    top: TRACK_LINE_TOP,
+    height: TRACK_LINE_THICKNESS,
     borderRadius: 2,
     backgroundColor: '#E6D4BF',
   },
   trackProgressLine: {
     position: 'absolute',
-    height: 3,
+    top: TRACK_LINE_TOP,
+    height: TRACK_LINE_THICKNESS,
     borderRadius: 2,
     backgroundColor: '#2E7D32',
   },
