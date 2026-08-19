@@ -425,6 +425,25 @@ export const buildAttributeTypes = (productTypes?: string[], variants: ProductVa
   return Array.from(keys);
 };
 
+const UNIT_TYPE_KEYS = new Set(['unit', 'unitvalue', 'Unit', 'UnitValue']);
+
+export const resolveAttributeTypes = (product: CatalogProductItem): string[] => {
+  const built = buildAttributeTypes(product.attributeTypes, product.variants || []).filter(
+    (key) => !UNIT_TYPE_KEYS.has(key)
+  );
+  if (built.length > 0) return built;
+  return ['Flavour'];
+};
+
+export const buildAddVariantsBody = (product: CatalogProductItem, variant: ProductVariantItem) => {
+  const attributeTypes = resolveAttributeTypes(product);
+  return {
+    parentShopProductId: product.shopProductId,
+    attributeTypes,
+    variants: [buildVariantRequest(variant, product.brand, product.expiryDate || '')],
+  };
+};
+
 export const getVariantPackLabel = (variant: ProductVariantItem, product?: CatalogProductItem): string => {
   const pack = [asText(variant.unitValue), asText(variant.unit)].filter(Boolean).join(' ');
   if (pack) return pack;
