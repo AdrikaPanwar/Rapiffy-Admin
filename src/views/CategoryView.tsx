@@ -60,6 +60,12 @@ const VARIANT_THUMB_STEP = VARIANT_THUMB_SIZE + VARIANT_THUMB_GAP;
 const STORY_RAIL_HEIGHT = 84;
 const HERO_HEIGHT = Math.min(360, Math.max(240, Math.round((windowHeight - STORY_RAIL_HEIGHT) * 0.42)));
 const INSTAMART_BLUE = '#1E6BFF';
+const SQUARE_GALLERY_PICKER_OPTIONS: ImagePicker.ImagePickerOptions = {
+  mediaTypes: ['images'],
+  allowsEditing: true,
+  aspect: [1, 1],
+  quality: 0.6,
+};
 
 export interface CategoryViewProps {
   onNavigate?: (screen: 'login' | 'forgot_password' | 'home' | 'category' | 'coverage' | 'order' | 'profile') => void;
@@ -176,12 +182,7 @@ const ProductDetailPopup = ({
   const pickNewVariantImage = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.6,
-    });
+    const result = await ImagePicker.launchImageLibraryAsync(SQUARE_GALLERY_PICKER_OPTIONS);
     if (!result.canceled && result.assets && result.assets.length > 0) {
       setNewVariantImage(result.assets[0].uri);
     }
@@ -892,12 +893,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const pickImageFromDeviceGallery = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.6, 
-    });
+    const result = await ImagePicker.launchImageLibraryAsync(SQUARE_GALLERY_PICKER_OPTIONS);
     if (!result.canceled && result.assets && result.assets.length > 0) {
       setProductImageTarget(result.assets[0].uri);
     }
@@ -906,12 +902,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const pickVariantImageFromDeviceGallery = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permissionResult.granted) return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.6, 
-    });
+    const result = await ImagePicker.launchImageLibraryAsync(SQUARE_GALLERY_PICKER_OPTIONS);
     if (!result.canceled && result.assets && result.assets.length > 0) {
       setVariantImageTarget(result.assets[0].uri);
     }
@@ -1562,8 +1553,34 @@ const styles = StyleSheet.create({
   drawerTitleText: { fontSize: 15, fontWeight: '800', color: '#2B1E1A' },
   closeDrawerIconText: { fontSize: 18, color: '#5C4033', padding: 4 },
   inputLabelField: { fontSize: 11, fontWeight: '700', color: '#5C4033', marginTop: 10, marginBottom: 4 },
-  imageSelectorPreviewContainer: { height: 90, borderWidth: 1, borderColor: '#E6D4BF', borderRadius: 8, backgroundColor: '#FFFBF7', borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', marginVertical: 4 },
-  variantImagePreviewContainer: { height: 70, borderWidth: 1, borderColor: '#E6D4BF', borderRadius: 8, backgroundColor: '#FFFFFF', borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', marginVertical: 4 },
+  imageSelectorPreviewContainer: {
+    width: 180,
+    height: 180,
+    alignSelf: 'center',
+    borderWidth: 1,
+    borderColor: '#E6D4BF',
+    borderRadius: 12,
+    backgroundColor: '#FFFBF7',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    marginVertical: 8,
+  },
+  variantImagePreviewContainer: {
+    width: 140,
+    height: 140,
+    alignSelf: 'center',
+    borderWidth: 1,
+    borderColor: '#E6D4BF',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    marginVertical: 8,
+  },
   fullPreviewTargetImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   photoTriggerBtnLabel: { fontSize: 11, color: '#D2691E', fontWeight: '700', textAlign: 'center', paddingHorizontal: 6 },
   customTextInputRow: { height: 44, borderWidth: 1, borderColor: '#E6D4BF', borderRadius: 8, paddingHorizontal: 12, color: '#2B1E1A', backgroundColor: '#FFFBF7', fontSize: 13 },
