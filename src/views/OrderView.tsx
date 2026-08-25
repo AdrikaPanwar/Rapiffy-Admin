@@ -978,6 +978,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       const statusColor = getStatusColor(currentStatus);
       const deliveryAddress = detail?.deliveryAddress || '';
       const pendingAction = pendingActionById[item.orderId];
+      const canConfirm = getNextAction(currentStatus) === 'confirm';
 
       return (
         <View style={[styles.orderCard, !isSelected && styles.orderCardMuted]}>
@@ -1059,22 +1060,7 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                 onAdvance={(action) => requestStatusUpdate(item, action)}
               />
 
-              {!pendingAction && getNextAction(currentStatus) === 'confirm' ? (
-                <TouchableOpacity
-                  style={styles.shopActionBtn}
-                  onPress={() => requestStatusUpdate(item, 'confirm')}
-                  activeOpacity={0.85}
-                  disabled={isStatusUpdating}
-                >
-                  {isStatusUpdating ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.shopActionText}>Confirm order</Text>
-                  )}
-                </TouchableOpacity>
-              ) : null}
-
-              {pendingAction ? (
+              {pendingAction && pendingAction !== 'confirm' ? (
                 <View style={styles.confirmBox}>
                   <Text style={styles.confirmTitle}>{ACTION_COPY[pendingAction].title}</Text>
                   <Text style={styles.confirmText}>{ACTION_COPY[pendingAction].text}</Text>
@@ -1243,6 +1229,49 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                   {isSelected ? 'Mark out of stock (un-select)' : 'Restore (mark available)'}
                 </Text>
               </TouchableOpacity>
+
+              {canConfirm && !pendingAction ? (
+                <TouchableOpacity
+                  style={styles.shopActionBtn}
+                  onPress={() => requestStatusUpdate(item, 'confirm')}
+                  activeOpacity={0.85}
+                  disabled={isStatusUpdating}
+                >
+                  {isStatusUpdating ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.shopActionText}>Confirm order</Text>
+                  )}
+                </TouchableOpacity>
+              ) : null}
+
+              {pendingAction === 'confirm' ? (
+                <View style={styles.confirmBox}>
+                  <Text style={styles.confirmTitle}>{ACTION_COPY.confirm.title}</Text>
+                  <Text style={styles.confirmText}>{ACTION_COPY.confirm.text}</Text>
+                  <View style={styles.confirmRow}>
+                    <TouchableOpacity
+                      style={styles.confirmCancelBtn}
+                      onPress={() => cancelStatusUpdate(item.orderId)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.confirmCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.confirmGoBtn}
+                      onPress={() => commitStatusUpdate(item)}
+                      activeOpacity={0.85}
+                      disabled={isStatusUpdating}
+                    >
+                      {isStatusUpdating ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.confirmGoText}>{ACTION_COPY.confirm.button}</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : null}
             </View>
           )}
         </View>
