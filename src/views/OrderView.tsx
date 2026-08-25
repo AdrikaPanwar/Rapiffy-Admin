@@ -904,14 +904,12 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
     [applyDetailToList, fetchOrderExtras, fetchOrders, resolveToken, selectedStatus],
   );
 
-  const requestStatusUpdate = useCallback((order: OrderSummary, action: StatusAction, expand = true) => {
-    if (expand) {
-      setExpandedIds((prev) => {
-        const next = new Set(prev);
-        next.add(order.orderId);
-        return next;
-      });
-    }
+  const requestStatusUpdate = useCallback((order: OrderSummary, action: StatusAction) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      next.add(order.orderId);
+      return next;
+    });
     setPendingActionById((prev) => ({ ...prev, [order.orderId]: action }));
     if (!orderDetails[order.orderId] && !detailLoadingIds.has(order.orderId)) {
       fetchOrderExtras(order);
@@ -982,56 +980,6 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
       const pendingAction = pendingActionById[item.orderId];
       const canConfirm = getNextAction(currentStatus) === 'confirm';
 
-      const renderConfirmAction = (collapsed: boolean) => {
-        if (!canConfirm && !pendingAction) return null;
-        return (
-          <View style={collapsed ? styles.collapsedConfirmWrap : undefined}>
-            {canConfirm && !pendingAction ? (
-              <TouchableOpacity
-                style={[styles.shopActionBtn, collapsed && styles.collapsedConfirmBtn]}
-                onPress={() => requestStatusUpdate(item, 'confirm', !collapsed)}
-                activeOpacity={0.85}
-                disabled={isStatusUpdating}
-              >
-                {isStatusUpdating ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.shopActionText}>{collapsed ? 'Confirm' : 'Confirm order'}</Text>
-                )}
-              </TouchableOpacity>
-            ) : null}
-
-            {pendingAction ? (
-              <View style={[styles.confirmBox, collapsed && styles.collapsedConfirmBox]}>
-                <Text style={styles.confirmTitle}>{ACTION_COPY[pendingAction].title}</Text>
-                <Text style={styles.confirmText}>{ACTION_COPY[pendingAction].text}</Text>
-                <View style={styles.confirmRow}>
-                  <TouchableOpacity
-                    style={styles.confirmCancelBtn}
-                    onPress={() => cancelStatusUpdate(item.orderId)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.confirmCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.confirmGoBtn}
-                    onPress={() => commitStatusUpdate(item)}
-                    activeOpacity={0.85}
-                    disabled={isStatusUpdating}
-                  >
-                    {isStatusUpdating ? (
-                      <ActivityIndicator size="small" color="#FFFFFF" />
-                    ) : (
-                      <Text style={styles.confirmGoText}>{ACTION_COPY[pendingAction].button}</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : null}
-          </View>
-        );
-      };
-
       return (
         <View style={[styles.orderCard, !isSelected && styles.orderCardMuted]}>
           <View style={styles.cardHeaderRow}>
@@ -1082,7 +1030,6 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
 
           {!isExpanded ? (
             <View style={styles.collapsedTrackWrap}>
-              {renderConfirmAction(true)}
               <OrderStatusTracker
                 status={currentStatus}
                 compact
@@ -1113,7 +1060,33 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                 onAdvance={(action) => requestStatusUpdate(item, action)}
               />
 
-              {renderConfirmAction(false)}
+              {pendingAction && pendingAction !== 'confirm' ? (
+                <View style={styles.confirmBox}>
+                  <Text style={styles.confirmTitle}>{ACTION_COPY[pendingAction].title}</Text>
+                  <Text style={styles.confirmText}>{ACTION_COPY[pendingAction].text}</Text>
+                  <View style={styles.confirmRow}>
+                    <TouchableOpacity
+                      style={styles.confirmCancelBtn}
+                      onPress={() => cancelStatusUpdate(item.orderId)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.confirmCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.confirmGoBtn}
+                      onPress={() => commitStatusUpdate(item)}
+                      activeOpacity={0.85}
+                      disabled={isStatusUpdating}
+                    >
+                      {isStatusUpdating ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.confirmGoText}>{ACTION_COPY[pendingAction].button}</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : null}
 
               <View style={styles.addressBox}>
                 <View style={styles.addressTitleRow}>
@@ -1256,6 +1229,49 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                   {isSelected ? 'Mark out of stock (un-select)' : 'Restore (mark available)'}
                 </Text>
               </TouchableOpacity>
+
+              {canConfirm && !pendingAction ? (
+                <TouchableOpacity
+                  style={styles.shopActionBtn}
+                  onPress={() => requestStatusUpdate(item, 'confirm')}
+                  activeOpacity={0.85}
+                  disabled={isStatusUpdating}
+                >
+                  {isStatusUpdating ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.shopActionText}>Confirm order</Text>
+                  )}
+                </TouchableOpacity>
+              ) : null}
+
+              {pendingAction === 'confirm' ? (
+                <View style={styles.confirmBox}>
+                  <Text style={styles.confirmTitle}>{ACTION_COPY.confirm.title}</Text>
+                  <Text style={styles.confirmText}>{ACTION_COPY.confirm.text}</Text>
+                  <View style={styles.confirmRow}>
+                    <TouchableOpacity
+                      style={styles.confirmCancelBtn}
+                      onPress={() => cancelStatusUpdate(item.orderId)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.confirmCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.confirmGoBtn}
+                      onPress={() => commitStatusUpdate(item)}
+                      activeOpacity={0.85}
+                      disabled={isStatusUpdating}
+                    >
+                      {isStatusUpdating ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.confirmGoText}>{ACTION_COPY.confirm.button}</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : null}
             </View>
           )}
         </View>
@@ -1521,15 +1537,6 @@ const styles = StyleSheet.create({
   collapsedTrackWrap: {
     paddingHorizontal: 10,
     paddingBottom: 10,
-  },
-  collapsedConfirmWrap: {
-    marginBottom: 8,
-  },
-  collapsedConfirmBtn: {
-    marginTop: 0,
-  },
-  collapsedConfirmBox: {
-    marginTop: 0,
   },
   trackBox: {
     marginTop: 12,
