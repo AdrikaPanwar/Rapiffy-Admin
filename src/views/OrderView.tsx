@@ -1230,20 +1230,27 @@ export const OrderView: React.FC<OrderViewProps> = ({ onNavigate, authToken }) =
                 </Text>
               </TouchableOpacity>
 
-              {canConfirm && !pendingAction ? (
-                <TouchableOpacity
-                  style={styles.shopActionBtn}
-                  onPress={() => requestStatusUpdate(item, 'confirm')}
-                  activeOpacity={0.85}
-                  disabled={isStatusUpdating}
-                >
-                  {isStatusUpdating ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.shopActionText}>Confirm order</Text>
-                  )}
-                </TouchableOpacity>
-              ) : null}
+              <TouchableOpacity
+                style={styles.shopActionBtn}
+                onPress={() => {
+                  if (!canConfirm) {
+                    Alert.alert(
+                      'Cannot confirm yet',
+                      'Confirm works on PENDING orders. After confirm, the customer app shows Ordered.',
+                    );
+                    return;
+                  }
+                  requestStatusUpdate(item, 'confirm');
+                }}
+                activeOpacity={0.85}
+                disabled={isStatusUpdating}
+              >
+                {isStatusUpdating ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.shopActionText}>Confirm order</Text>
+                )}
+              </TouchableOpacity>
 
               {pendingAction === 'confirm' ? (
                 <View style={styles.confirmBox}>
