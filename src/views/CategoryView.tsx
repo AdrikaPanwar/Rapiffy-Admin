@@ -1211,7 +1211,17 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       <StatusBar barStyle="dark-content" backgroundColor="#FFFBF7" />
 
       <View style={styles.topControlHeader}>
-        <View style={styles.headerSideSlot} />
+        {mode === 'products' ? (
+          <TouchableOpacity
+            style={styles.leftPlusActionBtn}
+            onPress={() => onNavigate?.('category')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.headerToggleText}>‹</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.headerSideSlot} />
+        )}
         <Text style={styles.mainHeaderTitle} numberOfLines={1}>
           {mode === 'products' ? 'Products' : 'Categories'}
         </Text>
@@ -1260,6 +1270,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                       <Text style={styles.categoryTileIconText}>{label.charAt(0).toUpperCase()}</Text>
                     </View>
                     <Text style={styles.categoryTileLabel} numberOfLines={2}>{label}</Text>
+                    <Text style={styles.categoryTileMeta} numberOfLines={1}>
+                      {item.products.length === 1 ? '1 product' : `${item.products.length} products`}
+                    </Text>
                   </TouchableOpacity>
                 );
               }}
@@ -1625,6 +1638,7 @@ const styles = StyleSheet.create({
   },
   categoryTileIconText: { fontSize: 20, fontWeight: '800', color: '#FFFBF7' },
   categoryTileLabel: { fontSize: 13, fontWeight: '800', color: '#2B1E1A', textAlign: 'center' },
+  categoryTileMeta: { fontSize: 10, fontWeight: '700', color: '#A89685', textAlign: 'center', marginTop: 4 },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
