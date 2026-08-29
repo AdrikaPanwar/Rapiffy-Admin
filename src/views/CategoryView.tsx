@@ -50,13 +50,15 @@ import {
   parseAttributeTypesInput,
   buildAddUnlistedBody,
   buildUpdateProductBody,
-  findCategoryGroup,
-  firstSubCategoryId,
-  productsForSubCategory,
+  flattenSubCategories,
+  allProductsFromTree,
+  productsAcrossTree,
+  filterProductsBySearch,
   catalogSendJson,
   type CatalogProductItem,
   type ProductVariantItem,
   type ServerCategoryGroup,
+  type CatalogSubCategoryTile,
 } from '../api/adminCatalog';
 
 export type { CatalogProductItem, ProductVariantItem, ServerCategoryGroup };
@@ -79,8 +81,8 @@ export interface CategoryViewProps {
   onNavigate?: (screen: AppScreen) => void;
   authToken?: string;
   mode?: 'categories' | 'products';
-  selectedCategoryName?: string;
-  onOpenCategory?: (categoryName: string) => void;
+  selectedSubCategoryId?: number | null;
+  onOpenSubCategory?: (subCategoryId: number | null) => void;
 }
 
 interface ProductDetailPopupProps {
@@ -529,9 +531,6 @@ const ProductGridItem = React.memo(({ item, onOpenVariants, onEdit, onDelete, on
       <View style={styles.productDetailMetaFrame}>
         {safeBrand ? <Text style={styles.brandMetaLabel} numberOfLines={1}>{safeBrand}</Text> : null}
         <Text style={styles.productNameLabel} numberOfLines={2}>{safeName}</Text>
-        {asText(item.subCategoryName) ? (
-          <Text style={styles.unitScaleTag} numberOfLines={1}>{item.subCategoryName}</Text>
-        ) : null}
         <Text style={styles.unitScaleTag}>{[safeUnitVal, safeUnitType].filter(Boolean).join(' ')}</Text>
         {item.hasVariants && Array.isArray(item.variants) && item.variants.length > 0 ? (
           <Text style={styles.optionCountTag}>{item.variants.length} packs · tap to slide</Text>
@@ -549,18 +548,16 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   onNavigate,
   authToken,
   mode = 'categories',
-  selectedCategoryName = '',
-  onOpenCategory,
+  selectedSubCategoryId: incomingSubCategoryId = null,
+  onOpenSubCategory,
 }) => {
   const [serverGroups, setServerGroups] = useState<ServerCategoryGroup[]>([]);
   const [backendCategoryFilteredProducts, setBackendCategoryFilteredProducts] = useState<CatalogProductItem[] | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [catalogLoadError, setCatalogLoadError] = useState<string>('');
 
-  const [categoriesList, setCategoriesList] = useState<string[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string>("");
-  const [categoryMetadataMap, setCategoryMetadataMap] = useState<Record<string, number>>({});
-  const [selectedSubCategoryId, setSelectedSubCategoryId] = useState<number | null>(null);
+  const [selectedSubCategoryId, setSelectedSubCategoryId] = useState<number | null>(incomingSubCategoryId);
+  const [productSearchQuery, setProductSearchQuery] = useState<string>('');
   const [formSubCategoryId, setFormSubCategoryId] = useState<number | null>(null);
   const [removedVariantIds, setRemovedVariantIds] = useState<number[]>([]);
   const [prodAttributeTypesInput, setProdAttributeTypesInput] = useState<string>('');
@@ -618,9 +615,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
           setCatalogLoadError(
             mode === 'products'
               ? 'Log in to load products from GET /v1/admin/catalog/my-products.'
-              : 'Log in to load categories from GET /v1/admin/catalog/my-products.'
+              : 'Log in to load subcategories from GET /v1/admin/catalog/my-products.'
           );
-          setCategoriesList([]);
           setServerGroups([]);
           setBackendCategoryFilteredProducts([]);
           setIsLoading(false);
@@ -647,42 +643,16 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       const normalizedGroups = parseMyProductsTree(itemsData);
 
       setServerGroups(normalizedGroups);
-      
-      const extractedCategories = normalizedGroups
-        .map((group) => group.categoryName)
-        .filter((name) => Boolean(asText(name)));
-      
-      setCategoriesList(extractedCategories);
 
-      const dynamicMap: Record<string, number> = {};
-      normalizedGroups.forEach((group) => {
-        if (group.categoryName && group.categoryId) {
-          dynamicMap[group.categoryName] = group.categoryId;
-        }
-      });
-      setCategoryMetadataMap(dynamicMap);
-      
-      if (extractedCategories.length > 0 && mode === 'products') {
-        const requested = selectedCategoryName && extractedCategories.includes(selectedCategoryName)
-          ? selectedCategoryName
-          : String(extractedCategories[0]);
-        setSelectedCategory(requested);
-        const firstGroup = findCategoryGroup(normalizedGroups, requested) || normalizedGroups[0];
-        const currentSubId = selectedSubCategoryId && (firstGroup?.subCategories || []).some((sub) => sub.subCategoryId === selectedSubCategoryId)
-          ? selectedSubCategoryId
-          : null;
-        setSelectedSubCategoryId(currentSubId);
-        const treeProducts = productsForSubCategory(firstGroup, currentSubId);
-        setBackendCategoryFilteredProducts(treeProducts);
-        if (currentSubId) {
-          const fetched = await fetchProductsBySubCategory(currentSubId, resolvedToken);
-          setBackendCategoryFilteredProducts(mergeUniqueProducts(treeProducts, fetched));
-        } else if (firstGroup && Array.isArray(firstGroup.subCategories) && firstGroup.subCategories.length > 0) {
-          fetchProductsForCategoryGroup(firstGroup, resolvedToken, treeProducts);
-        }
+      if (mode === 'products') {
+        const requestedSubId = incomingSubCategoryId && flattenSubCategories(normalizedGroups).some((sub) => sub.subCategoryId === incomingSubCategoryId)
+          ? incomingSubCategoryId
+          : selectedSubCategoryId && flattenSubCategories(normalizedGroups).some((sub) => sub.subCategoryId === selectedSubCategoryId)
+            ? selectedSubCategoryId
+            : null;
+        setSelectedSubCategoryId(requestedSubId);
+        await loadProductsForFilter(normalizedGroups, requestedSubId, resolvedToken);
       } else {
-        setSelectedCategory('');
-        setSelectedSubCategoryId(null);
         setBackendCategoryFilteredProducts([]);
       }
     } catch (err) {
@@ -712,74 +682,48 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     }
   }, [authToken]);
 
-  const fetchProductsForCategoryGroup = async (
-    group: ServerCategoryGroup,
+  const loadProductsForFilter = async (
+    groups: ServerCategoryGroup[],
+    subCategoryId: number | null,
     overrideToken?: string,
-    fallbackProducts?: CatalogProductItem[]
   ) => {
-    const nestedSubProducts = (Array.isArray(group.subCategories) ? group.subCategories : [])
-      .flatMap((sub) => (Array.isArray(sub.products) ? sub.products : []));
-    const treeProducts = mergeUniqueProducts(
-      fallbackProducts,
-      group.products,
-      nestedSubProducts,
-    );
-    const subCategories = Array.isArray(group.subCategories) ? group.subCategories : [];
+    const treeProducts = productsAcrossTree(groups, subCategoryId);
     setBackendCategoryFilteredProducts(treeProducts);
-    if (subCategories.length === 0) {
+    if (subCategoryId) {
+      const fetched = await fetchProductsBySubCategory(subCategoryId, overrideToken);
+      setBackendCategoryFilteredProducts(mergeUniqueProducts(treeProducts, fetched));
       return;
     }
-
+    const allSubs = flattenSubCategories(groups);
+    if (allSubs.length === 0) return;
     try {
       const lists = await Promise.all(
-        subCategories.map((sub) => fetchProductsBySubCategory(sub.subCategoryId, overrideToken))
+        allSubs.map((sub) => fetchProductsBySubCategory(sub.subCategoryId, overrideToken))
       );
       setBackendCategoryFilteredProducts(mergeUniqueProducts(treeProducts, ...lists));
-    } catch (error) {
+    } catch {
       setBackendCategoryFilteredProducts(treeProducts);
-    }
-  };
-
-  const handleCategoryClick = (categoryName: string) => {
-    setSelectedCategory(categoryName);
-    onOpenCategory?.(categoryName);
-    const matchedGroup = findCategoryGroup(serverGroups, categoryName);
-    setSelectedSubCategoryId(null);
-    if (matchedGroup) {
-      const treeProducts = productsForSubCategory(matchedGroup, null);
-      setBackendCategoryFilteredProducts(treeProducts);
-      fetchProductsForCategoryGroup(matchedGroup, undefined, treeProducts);
-    } else {
-      setBackendCategoryFilteredProducts([]);
     }
   };
 
   const applySubCategoryFilter = useCallback(async (subCategoryId: number | null) => {
     setSelectedSubCategoryId(subCategoryId);
-    const matchedGroup = findCategoryGroup(serverGroups, selectedCategory || selectedCategoryName);
-    const treeProducts = productsForSubCategory(matchedGroup, subCategoryId);
-    setBackendCategoryFilteredProducts(treeProducts);
-    if (!matchedGroup) return;
-    if (subCategoryId == null) {
-      await fetchProductsForCategoryGroup(matchedGroup, undefined, treeProducts);
-      return;
-    }
-    const fetched = await fetchProductsBySubCategory(subCategoryId);
-    setBackendCategoryFilteredProducts(mergeUniqueProducts(treeProducts, fetched));
-  }, [serverGroups, selectedCategory, selectedCategoryName, fetchProductsBySubCategory]);
+    onOpenSubCategory?.(subCategoryId);
+    await loadProductsForFilter(serverGroups, subCategoryId);
+  }, [serverGroups, onOpenSubCategory, fetchProductsBySubCategory]);
 
-  const openCategoryProducts = (categoryName: string) => {
-    onOpenCategory?.(categoryName);
-    onNavigate?.('product');
+  const openSubCategoryProducts = (subCategoryId: number) => {
+    onOpenSubCategory?.(subCategoryId);
   };
 
   useEffect(() => {
     if (mode !== 'products') return;
-    if (!selectedCategoryName) return;
     if (!serverGroups.length) return;
-    if (selectedCategory === selectedCategoryName) return;
-    handleCategoryClick(selectedCategoryName);
-  }, [mode, selectedCategoryName, serverGroups, selectedCategory]);
+    const nextId = incomingSubCategoryId ?? null;
+    if (nextId === selectedSubCategoryId) return;
+    setSelectedSubCategoryId(nextId);
+    loadProductsForFilter(serverGroups, nextId);
+  }, [mode, incomingSubCategoryId, serverGroups]);
 
   const toggleProductVisibility = useCallback(async (shopProductId: number, currentActiveState: boolean) => {
     const nextActiveState = !currentActiveState;
@@ -984,7 +928,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     setProdHasVariants(!!item.hasVariants || (Array.isArray(item.variants) && item.variants.length > 0));
     setProductImageTarget(asHttpUrl(item.imageUrl));
     setProdAttributeTypesInput(Array.isArray(item.attributeTypes) ? item.attributeTypes.filter(Boolean).join(', ') : '');
-    setFormSubCategoryId(item.subCategoryId || selectedSubCategoryId || firstSubCategoryId(findCategoryGroup(serverGroups, selectedCategory || selectedCategoryName)));
+    setFormSubCategoryId(item.subCategoryId || selectedSubCategoryId || flattenSubCategories(serverGroups)[0]?.subCategoryId || null);
     
     setTempVariantsList(Array.isArray(item.variants) ? item.variants : []);
     setRemovedVariantIds([]);
@@ -1059,10 +1003,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     setProdAttributeTypesInput('');
     setIsEditingMode(false);
     setTargetEditProductId(null);
-    const group = findCategoryGroup(serverGroups, selectedCategory || selectedCategoryName);
-    setFormSubCategoryId(selectedSubCategoryId || firstSubCategoryId(group));
+    setFormSubCategoryId(selectedSubCategoryId || flattenSubCategories(serverGroups)[0]?.subCategoryId || null);
     setIsProductModalOpen(true);
-  }, [serverGroups, selectedCategory, selectedCategoryName, selectedSubCategoryId]);
+  }, [serverGroups, selectedSubCategoryId]);
 
   const saveOrUpdateProductWorkflow = async () => {
     if (!prodNameInput.trim() || !prodPriceInput.trim()) {
@@ -1073,8 +1016,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
     if (!fastToken) return;
 
-    const matchedGroup = findCategoryGroup(serverGroups, selectedCategory || selectedCategoryName);
-    const resolvedSubCategoryId = formSubCategoryId || firstSubCategoryId(matchedGroup);
+    const resolvedSubCategoryId = formSubCategoryId || selectedSubCategoryId || flattenSubCategories(serverGroups)[0]?.subCategoryId || null;
 
     if (!isEditingMode && !resolvedSubCategoryId) {
       Alert.alert("Subcategory required", "Pick a subcategory from GET /v1/admin/catalog/my-products before adding a product.");
@@ -1233,31 +1175,14 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     });
   }, []);
 
-  const safeCategories = Array.isArray(categoriesList) ? categoriesList : [];
-  const activeCategoryGroup = useMemo(
-    () => findCategoryGroup(serverGroups, selectedCategory || selectedCategoryName),
-    [serverGroups, selectedCategory, selectedCategoryName],
-  );
-  const categorySubCategories = Array.isArray(activeCategoryGroup?.subCategories)
-    ? activeCategoryGroup.subCategories
-    : [];
+  const catalogSubCategories = useMemo(() => flattenSubCategories(serverGroups), [serverGroups]);
 
   const filteredGridProducts = useMemo(() => {
-    if (backendCategoryFilteredProducts !== null && Array.isArray(backendCategoryFilteredProducts)) {
-      return backendCategoryFilteredProducts;
-    }
-
-    const groups = Array.isArray(serverGroups) ? serverGroups : [];
-    if (groups.length === 0) return [];
-
-    const activeCat = selectedCategory || '';
-    if (!activeCat) return [];
-    const matchedGroup = groups.find(
-      (group) => group && group.categoryName === activeCat
-    );
-
-    return matchedGroup && Array.isArray(matchedGroup.products) ? matchedGroup.products : [];
-  }, [backendCategoryFilteredProducts, serverGroups, selectedCategory, safeCategories]);
+    const source = Array.isArray(backendCategoryFilteredProducts)
+      ? backendCategoryFilteredProducts
+      : allProductsFromTree(serverGroups);
+    return filterProductsBySearch(source, productSearchQuery);
+  }, [backendCategoryFilteredProducts, serverGroups, productSearchQuery]);
 
   const gridAvailableWidth = useMemo(() => {
     return windowWidth;
@@ -1286,22 +1211,10 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       <StatusBar barStyle="dark-content" backgroundColor="#FFFBF7" />
 
       <View style={styles.topControlHeader}>
-        {mode === 'products' ? (
-          <TouchableOpacity
-            style={styles.leftPlusActionBtn}
-            onPress={() => onNavigate?.('category')}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.headerToggleText}>‹</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.headerSideSlot} />
-        )}
-
+        <View style={styles.headerSideSlot} />
         <Text style={styles.mainHeaderTitle} numberOfLines={1}>
-          {mode === 'products' ? (selectedCategory || selectedCategoryName || 'Products') : 'Categories'}
+          {mode === 'products' ? 'Products' : 'Categories'}
         </Text>
-
         {mode === 'products' ? (
           <TouchableOpacity
             style={[styles.rightPlusActionBtn, isProductModalOpen && { backgroundColor: '#2B1E1A' }]}
@@ -1317,37 +1230,36 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
 
       {mode === 'categories' ? (
         <View style={styles.rightProductGridPanel}>
-          {isLoading && safeCategories.length === 0 ? (
+          {isLoading && catalogSubCategories.length === 0 ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
               <ActivityIndicator size="large" color="#D2691E" />
-              <Text style={{ fontSize: 12, color: '#A89685', fontWeight: '700', marginTop: 10 }}>Loading categories...</Text>
+              <Text style={{ fontSize: 12, color: '#A89685', fontWeight: '700', marginTop: 10 }}>Loading subcategories...</Text>
             </View>
-          ) : safeCategories.length === 0 ? (
+          ) : catalogSubCategories.length === 0 ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
               <Text style={{ fontSize: 13, color: '#5C4033', fontWeight: '700', textAlign: 'center' }}>
-                {catalogLoadError || 'No categories returned from GET /v1/admin/catalog/my-products.'}
+                {catalogLoadError || 'No subcategories returned from GET /v1/admin/catalog/my-products.'}
               </Text>
             </View>
           ) : (
             <FlatList
-              data={safeCategories}
-              keyExtractor={(item, index) => `cat_${item}_${index}`}
+              data={catalogSubCategories}
+              keyExtractor={(item) => `sub_${item.subCategoryId}`}
               numColumns={2}
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.categoryGridPadding}
-              renderItem={({ item }) => {
-                const safeCatName = String(item || '').trim();
-                if (!safeCatName) return null;
+              renderItem={({ item }: { item: CatalogSubCategoryTile }) => {
+                const label = asText(item.subCategoryName) || `#${item.subCategoryId}`;
                 return (
                   <TouchableOpacity
                     style={styles.categoryTile}
-                    onPress={() => openCategoryProducts(safeCatName)}
+                    onPress={() => openSubCategoryProducts(item.subCategoryId)}
                     activeOpacity={0.85}
                   >
                     <View style={styles.categoryTileIcon}>
-                      <Text style={styles.categoryTileIconText}>{safeCatName.charAt(0).toUpperCase()}</Text>
+                      <Text style={styles.categoryTileIconText}>{label.charAt(0).toUpperCase()}</Text>
                     </View>
-                    <Text style={styles.categoryTileLabel} numberOfLines={2}>{safeCatName}</Text>
+                    <Text style={styles.categoryTileLabel} numberOfLines={2}>{label}</Text>
                   </TouchableOpacity>
                 );
               }}
@@ -1356,7 +1268,20 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
         </View>
       ) : (
         <View style={styles.rightProductGridPanel}>
-          {categorySubCategories.length > 0 ? (
+          <View style={styles.searchBox}>
+            <Svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#A89685" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+              <Path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z" />
+              <Path d="m21 21-4.3-4.3" />
+            </Svg>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search products"
+              placeholderTextColor="#A89685"
+              value={productSearchQuery}
+              onChangeText={setProductSearchQuery}
+            />
+          </View>
+          {catalogSubCategories.length > 0 ? (
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -1369,7 +1294,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
               >
                 <Text style={[styles.subCategoryChipText, selectedSubCategoryId == null && styles.subCategoryChipTextActive]}>All</Text>
               </TouchableOpacity>
-              {categorySubCategories.map((sub) => {
+              {catalogSubCategories.map((sub) => {
                 const isActive = selectedSubCategoryId === sub.subCategoryId;
                 return (
                   <TouchableOpacity
@@ -1389,16 +1314,16 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
           {isLoading && (!filteredGridProducts || filteredGridProducts.length === 0) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
               <ActivityIndicator size="large" color="#D2691E" />
-              <Text style={{ fontSize: 12, color: '#A89685', fontWeight: '700', marginTop: 10 }}>Syncing Catalog Metrics...</Text>
+              <Text style={{ fontSize: 12, color: '#A89685', fontWeight: '700', marginTop: 10 }}>Loading products...</Text>
             </View>
           ) : (!filteredGridProducts || filteredGridProducts.length === 0) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
               <Text style={{ fontSize: 13, color: '#5C4033', fontWeight: '700', textAlign: 'center' }}>
                 {catalogLoadError
                   ? catalogLoadError
-                  : safeCategories.length === 0
-                    ? "No products returned from GET /v1/admin/catalog/my-products"
-                    : "No products inside this catalog node"}
+                  : productSearchQuery.trim()
+                    ? 'No products match your search.'
+                    : 'No products returned from GET /v1/admin/catalog/my-products'}
               </Text>
             </View>
           ) : (
@@ -1429,11 +1354,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
             </View>
 
             <ScrollView style={{ marginTop: 10 }} showsVerticalScrollIndicator={false}>
-              {!isEditingMode && categorySubCategories.length > 0 ? (
+              {!isEditingMode && catalogSubCategories.length > 0 ? (
                 <View>
                   <Text style={styles.inputLabelField}>Subcategory *</Text>
                   <View style={styles.formChipWrap}>
-                    {categorySubCategories.map((sub) => {
+                    {catalogSubCategories.map((sub) => {
                       const isActive = formSubCategoryId === sub.subCategoryId;
                       return (
                         <TouchableOpacity
@@ -1702,6 +1627,27 @@ const styles = StyleSheet.create({
   },
   categoryTileIconText: { fontSize: 20, fontWeight: '800', color: '#FFFBF7' },
   categoryTileLabel: { fontSize: 13, fontWeight: '800', color: '#2B1E1A', textAlign: 'center' },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 12,
+    marginTop: 12,
+    marginBottom: 4,
+    paddingHorizontal: 12,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#FFFBF7',
+    borderWidth: 1,
+    borderColor: '#F0E2D3',
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 8,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2B1E1A',
+    paddingVertical: 0,
+  },
   subCategoryChipRow: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4, alignItems: 'center' },
   formChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
   subCategoryChip: {

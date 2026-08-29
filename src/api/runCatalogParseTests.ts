@@ -15,6 +15,9 @@ import {
   firstSubCategoryId,
   parseAttributeTypesInput,
   asIsoDate,
+  flattenSubCategories,
+  productsAcrossTree,
+  filterProductsBySearch,
 } from './adminCatalog';
 
 const assert = (condition: unknown, message: string) => {
@@ -215,5 +218,26 @@ const variantPut = buildVariantRequest({
 assert(variantPut.id === 11, 'PUT variant should include saved id');
 assert(variantPut.expiryDate == null, 'PUT variant must omit empty expiryDate');
 assert(variantPut.attributes.Flavour === 'Vanilla', 'PUT variant attributes mapping failed');
+
+const shopTree = parseMyProductsTree([
+  liveTreePayload[0],
+  {
+    categoryId: 8,
+    categoryName: 'Cloth',
+    subCategories: [{
+      subCategoryId: 21,
+      subCategoryName: 'Jeans',
+      products: [{ shopProductId: 1, productName: 'Jeans', brand: 'TATA', sellingPrice: 10 }],
+    }],
+  },
+]);
+const subTiles = flattenSubCategories(shopTree);
+assert(subTiles.length === 2, 'category page should list subcategories, not Cloth/Dairy');
+assert(subTiles.every((tile) => tile.subCategoryId > 0), 'subcategory tiles need API ids');
+assert(subTiles.map((tile) => tile.subCategoryName).join(',') === 'Ice Cream,Jeans', 'subcategory names should come from the tree');
+assert(productsAcrossTree(shopTree, null).length === 2, 'product page default should show all products');
+assert(productsAcrossTree(shopTree, 21).every((item) => item.shopProductId === 1), 'tapping Jeans should show only that subcategory');
+assert(filterProductsBySearch(productsAcrossTree(shopTree, null), 'amul').length === 1, 'search should match product or brand');
+assert(filterProductsBySearch(productsAcrossTree(shopTree, null), 'cloth').length === 0, 'search must not treat category names like Cloth as products');
 
 console.log('catalog parse tests passed');

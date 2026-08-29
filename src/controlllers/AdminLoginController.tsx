@@ -27,7 +27,7 @@ export const AdminLoginController: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [lockedIdentity, setLockedIdentity] = useState<string>('');
   const [authToken, setAuthToken] = useState<string>('');
-  const [catalogCategory, setCatalogCategory] = useState<string>(''); 
+  const [catalogSubCategoryId, setCatalogSubCategoryId] = useState<number | null>(null); 
 
   // Toast Notification States
   const [loginToastMessage, setLoginToastMessage] = useState<string>('');
@@ -214,17 +214,29 @@ export const AdminLoginController: React.FC = () => {
     );
   }
 
+  const handleNavigate = (screen: 'login' | 'forgot_password' | 'home' | 'category' | 'product' | 'order' | 'profile') => {
+    if (screen === 'product') {
+      setCatalogSubCategoryId(null);
+    }
+    setCurrentScreen(screen);
+  };
+
+  const openSubCategoryProducts = (subCategoryId: number | null) => {
+    setCatalogSubCategoryId(subCategoryId);
+    setCurrentScreen('product');
+  };
+
   const renderActiveScreen = () => {
     if (currentScreen === 'home') {
-      return <HomeView userCredential={lockedIdentity} onNavigate={(screen) => setCurrentScreen(screen)} />; 
+      return <HomeView userCredential={lockedIdentity} onNavigate={handleNavigate} />; 
     }
     if (currentScreen === 'category') {
       return (
         <CategoryView
           mode="categories"
           authToken={authToken}
-          onOpenCategory={setCatalogCategory}
-          onNavigate={(screen) => setCurrentScreen(screen)}
+          onOpenSubCategory={openSubCategoryProducts}
+          onNavigate={handleNavigate}
         />
       );
     }
@@ -232,17 +244,17 @@ export const AdminLoginController: React.FC = () => {
       return (
         <ProductView
           authToken={authToken}
-          selectedCategoryName={catalogCategory}
-          onOpenCategory={setCatalogCategory}
-          onNavigate={(screen) => setCurrentScreen(screen)}
+          selectedSubCategoryId={catalogSubCategoryId}
+          onOpenSubCategory={setCatalogSubCategoryId}
+          onNavigate={handleNavigate}
         />
       );
     }
     if (currentScreen === 'order') {
-      return <OrderView onNavigate={(screen) => setCurrentScreen(screen)} authToken={authToken} />;
+      return <OrderView onNavigate={handleNavigate} authToken={authToken} />;
     }
     if (currentScreen === 'profile') {
-      return <ProfileView onNavigate={(screen) => setCurrentScreen(screen)} onLogout={handleLogout} />;
+      return <ProfileView onNavigate={handleNavigate} onLogout={handleLogout} />;
     }
     if (currentScreen === 'forgot_password') {
       return (

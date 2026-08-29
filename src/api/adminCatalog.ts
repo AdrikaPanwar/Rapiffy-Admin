@@ -531,6 +531,72 @@ export const productsForSubCategory = (
   return mergeUniqueProducts(matchedTop, matchedNested);
 };
 
+export interface CatalogSubCategoryTile {
+  subCategoryId: number;
+  subCategoryName: string;
+  categoryId?: number;
+  categoryName: string;
+  products: CatalogProductItem[];
+}
+
+export const flattenSubCategories = (
+  groups: ServerCategoryGroup[] | null | undefined,
+): CatalogSubCategoryTile[] => {
+  const tiles: CatalogSubCategoryTile[] = [];
+  const seen = new Set<number>();
+  (Array.isArray(groups) ? groups : []).forEach((group) => {
+    (group.subCategories || []).forEach((sub) => {
+      if (!sub || !sub.subCategoryId || seen.has(sub.subCategoryId)) return;
+      seen.add(sub.subCategoryId);
+      tiles.push({
+        subCategoryId: sub.subCategoryId,
+        subCategoryName: asText(sub.subCategoryName),
+        categoryId: group.categoryId,
+        categoryName: asText(group.categoryName),
+        products: Array.isArray(sub.products) ? sub.products : [],
+      });
+    });
+  });
+  return tiles;
+};
+
+export const allProductsFromTree = (groups: ServerCategoryGroup[] | null | undefined): CatalogProductItem[] =>
+  mergeUniqueProducts(
+    ...(Array.isArray(groups) ? groups : []).map((group) => productsForSubCategory(group, null))
+  );
+
+export const productsAcrossTree = (
+  groups: ServerCategoryGroup[] | null | undefined,
+  subCategoryId: number | null,
+): CatalogProductItem[] => {
+  if (subCategoryId == null || subCategoryId <= 0) return allProductsFromTree(groups);
+  return mergeUniqueProducts(
+    ...(Array.isArray(groups) ? groups : []).map((group) => productsForSubCategory(group, subCategoryId))
+  );
+};
+
+export const filterProductsBySearch = (
+  products: CatalogProductItem[] | null | undefined,
+  query: string,
+): CatalogProductItem[] => {
+  const list = Array.isArray(products) ? products : [];
+  const needle = asText(query).toLowerCase();
+  if (!needle) return list;
+  return list.filter((item) => {
+    const haystack = [
+      item.productName,
+      item.brand,
+      item.subCategoryName,
+      item.unit,
+      item.unitValue,
+      ...(Array.isArray(item.variants) ? item.variants.map((variant) => variant.variantName) : []),
+    ]
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(needle);
+  });
+};
+
 export const catalogSendJson = async (
   url: string,
   token: string,
