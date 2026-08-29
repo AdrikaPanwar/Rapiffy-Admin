@@ -10,13 +10,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { LinearGradient, Rect, Defs, Stop, Path } from 'react-native-svg';
-import { BottomNavBar } from '../components/BottomNavBar';
+import { BottomNavBar, type AppScreen } from '../components/BottomNavBar';
 
 const { width: windowWidth, height: windowHeight } = Dimensions.get('window');
 
 export interface HomeViewProps {
   userCredential: string;
-  onNavigate?: (screen: 'login' | 'forgot_password' | 'home' | 'category' | 'coverage' | 'order' | 'profile') => void;
+  onNavigate?: (screen: AppScreen) => void;
 }
 
 const blankRowsPlaceholder = [1, 2, 3];

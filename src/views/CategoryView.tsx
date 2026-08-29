@@ -24,7 +24,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BottomNavBar } from '../components/BottomNavBar';
+import { BottomNavBar, type AppScreen } from '../components/BottomNavBar';
 import {
   adminCatalogUrls,
   catalogAuthHeaders,
@@ -68,8 +68,11 @@ const SQUARE_GALLERY_PICKER_OPTIONS: ImagePicker.ImagePickerOptions = {
 };
 
 export interface CategoryViewProps {
-  onNavigate?: (screen: 'login' | 'forgot_password' | 'home' | 'category' | 'coverage' | 'order' | 'profile') => void;
-  authToken?: string; 
+  onNavigate?: (screen: AppScreen) => void;
+  authToken?: string;
+  mode?: 'categories' | 'products';
+  selectedCategoryName?: string;
+  onOpenCategory?: (categoryName: string) => void;
 }
 
 interface ProductDetailPopupProps {
@@ -531,7 +534,13 @@ const ProductGridItem = React.memo(({ item, onOpenVariants, onEdit, onDelete, on
   );
 });
 
-export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToken }) => {
+export const CategoryView: React.FC<CategoryViewProps> = ({
+  onNavigate,
+  authToken,
+  mode = 'categories',
+  selectedCategoryName = '',
+  onOpenCategory,
+}) => {
   const [serverGroups, setServerGroups] = useState<ServerCategoryGroup[]>([]);
   const [backendCategoryFilteredProducts, setBackendCategoryFilteredProducts] = useState<CatalogProductItem[] | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -544,7 +553,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   const [removedVariantIds, setRemovedVariantIds] = useState<number[]>([]);
   const [prodAttributeTypes, setProdAttributeTypes] = useState<string[]>([]);
 
-  const [showSidebar, setShowSidebar] = useState<boolean>(false);
   const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
   const [variantSheetProduct, setVariantSheetProduct] = useState<CatalogProductItem | null>(null);
   const [selectedVariantIndex, setSelectedVariantIndex] = useState<number>(0);
@@ -634,10 +642,12 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       });
       setCategoryMetadataMap(dynamicMap);
       
-      if (extractedCategories.length > 0) {
-        const firstCatName = String(extractedCategories[0]);
-        setSelectedCategory(firstCatName);
-        const firstGroup = normalizedGroups.find((group) => group.categoryName === firstCatName) || normalizedGroups[0];
+      if (extractedCategories.length > 0 && mode === 'products') {
+        const requested = selectedCategoryName && extractedCategories.includes(selectedCategoryName)
+          ? selectedCategoryName
+          : String(extractedCategories[0]);
+        setSelectedCategory(requested);
+        const firstGroup = normalizedGroups.find((group) => group.categoryName === requested) || normalizedGroups[0];
         const firstSubId = firstGroup?.subCategories && firstGroup.subCategories.length > 0
           ? firstGroup.subCategories[0].subCategoryId
           : null;
@@ -648,6 +658,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
           fetchProductsForCategoryGroup(firstGroup, resolvedToken, treeProducts);
         }
       } else {
+        setSelectedCategory('');
+        setSelectedSubCategoryId(null);
         setBackendCategoryFilteredProducts([]);
       }
     } catch (err) {
@@ -713,6 +725,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 
   const handleCategoryClick = (categoryName: string) => {
     setSelectedCategory(categoryName);
+    onOpenCategory?.(categoryName);
     const matchedGroup = (Array.isArray(serverGroups) ? serverGroups : []).find(
       (group) => group && group.categoryName === categoryName
     );
@@ -727,6 +740,19 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       setBackendCategoryFilteredProducts([]);
     }
   };
+
+  const openCategoryProducts = (categoryName: string) => {
+    onOpenCategory?.(categoryName);
+    onNavigate?.('product');
+  };
+
+  useEffect(() => {
+    if (mode !== 'products') return;
+    if (!selectedCategoryName) return;
+    if (!serverGroups.length) return;
+    if (selectedCategory === selectedCategoryName) return;
+    handleCategoryClick(selectedCategoryName);
+  }, [mode, selectedCategoryName, serverGroups, selectedCategory]);
 
   const toggleProductVisibility = useCallback(async (shopProductId: number, currentActiveState: boolean) => {
     const nextActiveState = !currentActiveState;
@@ -1189,8 +1215,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
   }, [backendCategoryFilteredProducts, serverGroups, selectedCategory, safeCategories]);
 
   const gridAvailableWidth = useMemo(() => {
-    return showSidebar ? (windowWidth - 95) : windowWidth;
-  }, [showSidebar]);
+    return windowWidth;
+  }, []);
 
   const renderGridItem = useCallback(({ item }: { item: CatalogProductItem }) => (
     <ProductGridItem 
@@ -1215,55 +1241,74 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
       <StatusBar barStyle="dark-content" backgroundColor="#FFFBF7" />
 
       <View style={styles.topControlHeader}>
-        <TouchableOpacity 
-          style={[styles.leftPlusActionBtn, showSidebar && { backgroundColor: '#D2691E' }]} 
-          onPress={() => setShowSidebar(!showSidebar)} 
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.headerToggleText, showSidebar && { color: '#FFFFFF' }]}>☰</Text>
-        </TouchableOpacity>
-        
-        <Text style={styles.mainHeaderTitle}>Products & Categories</Text>
-
-        <TouchableOpacity 
-          style={[styles.rightPlusActionBtn, isProductModalOpen && { backgroundColor: '#2B1E1A' }]} 
-          onPress={() => setIsProductModalOpen(true)} 
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.headerPlusText, isProductModalOpen && { color: '#FFFFFF' }]}>＋</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.workspaceSplitterContainer}>
-        {showSidebar && (
-          <View style={styles.leftNavigationSidebar}>
-            <ScrollView showsVerticalScrollIndicator={false} removeClippedSubviews={Platform.OS === 'android'}>
-              {isLoading && safeCategories.length === 0 ? (
-                <ActivityIndicator style={{ marginTop: 30 }} size="small" color="#D2691E" />
-              ) : safeCategories.length === 0 ? (
-                <View style={{ padding: 10, alignItems: 'center' }}>
-                  <Text style={{ fontSize: 10, color: '#A89685', textAlign: 'center', fontWeight: '600', marginTop: 20 }}>No Categories</Text>
-                </View>
-              ) : (
-                safeCategories.map((category, index) => {
-                  const safeCatName = String(category || 'General');
-                  const isSelectedNode = (selectedCategory || safeCategories[0]) === safeCatName;
-                  return (
-                    <View key={index} style={[styles.sidebarNodeWrapper, isSelectedNode && styles.sidebarNodeActive]}>
-                      <TouchableOpacity style={styles.sidebarNodeButton} onPress={() => handleCategoryClick(safeCatName)} activeOpacity={0.8}>
-                        <View style={[styles.nodeIconIndicator, isSelectedNode && styles.nodeIconIndicatorActive]}>
-                          <Text style={[styles.indicatorChar, isSelectedNode && styles.indicatorCharActive]}>{safeCatName.charAt(0).toUpperCase()}</Text>
-                        </View>
-                        <Text style={[styles.sidebarNodeLabelText, isSelectedNode && styles.sidebarNodeLabelActive]}>{safeCatName}</Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })
-              )}
-            </ScrollView>
-          </View>
+        {mode === 'products' ? (
+          <TouchableOpacity
+            style={styles.leftPlusActionBtn}
+            onPress={() => onNavigate?.('category')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.headerToggleText}>‹</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.headerSideSlot} />
         )}
 
+        <Text style={styles.mainHeaderTitle} numberOfLines={1}>
+          {mode === 'products' ? (selectedCategory || selectedCategoryName || 'Products') : 'Categories'}
+        </Text>
+
+        {mode === 'products' ? (
+          <TouchableOpacity
+            style={[styles.rightPlusActionBtn, isProductModalOpen && { backgroundColor: '#2B1E1A' }]}
+            onPress={() => setIsProductModalOpen(true)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.headerPlusText, isProductModalOpen && { color: '#FFFFFF' }]}>＋</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.headerSideSlot} />
+        )}
+      </View>
+
+      {mode === 'categories' ? (
+        <View style={styles.rightProductGridPanel}>
+          {isLoading && safeCategories.length === 0 ? (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+              <ActivityIndicator size="large" color="#D2691E" />
+              <Text style={{ fontSize: 12, color: '#A89685', fontWeight: '700', marginTop: 10 }}>Loading categories...</Text>
+            </View>
+          ) : safeCategories.length === 0 ? (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+              <Text style={{ fontSize: 13, color: '#5C4033', fontWeight: '700', textAlign: 'center' }}>
+                {catalogLoadError || 'No categories found.'}
+              </Text>
+            </View>
+          ) : (
+            <FlatList
+              data={safeCategories}
+              keyExtractor={(item, index) => `cat_${item}_${index}`}
+              numColumns={2}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.categoryGridPadding}
+              renderItem={({ item }) => {
+                const safeCatName = String(item || 'General');
+                return (
+                  <TouchableOpacity
+                    style={styles.categoryTile}
+                    onPress={() => openCategoryProducts(safeCatName)}
+                    activeOpacity={0.85}
+                  >
+                    <View style={styles.categoryTileIcon}>
+                      <Text style={styles.categoryTileIconText}>{safeCatName.charAt(0).toUpperCase()}</Text>
+                    </View>
+                    <Text style={styles.categoryTileLabel} numberOfLines={2}>{safeCatName}</Text>
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          )}
+        </View>
+      ) : (
         <View style={styles.rightProductGridPanel}>
           {isLoading && (!filteredGridProducts || filteredGridProducts.length === 0) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -1296,7 +1341,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
             />
           )}
         </View>
-      </View>
+      )}
 
       {/* MODAL: ADD & EDIT */}
       <Modal transparent visible={isProductModalOpen} animationType="slide" onRequestClose={closeFormAndWipeDataBuffers}>
@@ -1500,7 +1545,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
         ) : null}
       </Modal>
 
-      <BottomNavBar onNavigate={onNavigate} currentActive="category" />
+      <BottomNavBar onNavigate={onNavigate} currentActive={mode === 'products' ? 'product' : 'category'} />
     </SafeAreaView>
   );
 };
@@ -1508,11 +1553,12 @@ export const CategoryView: React.FC<CategoryViewProps> = ({ onNavigate, authToke
 const styles = StyleSheet.create({
   viewMainWrapper: { flex: 1, backgroundColor: '#FFFBF7' },
   topControlHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0E2D3', backgroundColor: '#FFFFFF' },
+  headerSideSlot: { width: 36, height: 28 },
   leftPlusActionBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: '#FFF5EA' },
   rightPlusActionBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: '#F5ECE2' },
-  headerToggleText: { fontSize: 16, fontWeight: '800', color: '#D2691E' },
+  headerToggleText: { fontSize: 22, fontWeight: '800', color: '#D2691E', lineHeight: 24 },
   headerPlusText: { fontSize: 16, fontWeight: '800', color: '#2B1E1A' },
-  mainHeaderTitle: { fontSize: 19, fontWeight: '800', color: '#2B1E1A' },
+  mainHeaderTitle: { fontSize: 19, fontWeight: '800', color: '#2B1E1A', flex: 1, textAlign: 'center' },
   workspaceSplitterContainer: { flex: 1, flexDirection: 'row' },
   leftNavigationSidebar: { width: 95, backgroundColor: '#F5E6D3', borderRightWidth: 1, borderRightColor: '#E6D4BF' },
   sidebarNodeWrapper: { width: '100%', position: 'relative', borderBottomWidth: 1, borderBottomColor: 'rgba(230,212,191,0.4)' },
@@ -1525,6 +1571,31 @@ const styles = StyleSheet.create({
   sidebarNodeLabelText: { fontSize: 10, fontWeight: '700', color: '#5C4033', paddingHorizontal: 4, textAlign: 'center' },
   sidebarNodeLabelActive: { color: '#2B1E1A', fontWeight: '800' },
   rightProductGridPanel: { flex: 1, backgroundColor: '#FFFFFF' },
+  categoryGridPadding: { paddingHorizontal: 10, paddingTop: 12, paddingBottom: 110 },
+  categoryTile: {
+    flex: 1,
+    margin: 6,
+    minHeight: 130,
+    backgroundColor: '#FFFBF7',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#F0E2D3',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 18,
+  },
+  categoryTileIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: '#D2691E',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  categoryTileIconText: { fontSize: 20, fontWeight: '800', color: '#FFFBF7' },
+  categoryTileLabel: { fontSize: 13, fontWeight: '800', color: '#2B1E1A', textAlign: 'center' },
   gridContainerVerticalPadding: { paddingHorizontal: 6, paddingTop: 8, paddingBottom: 110 },
   productBlockContainer: { flex: 1, backgroundColor: '#FFFBF7', margin: 5, borderRadius: 14, borderWidth: 1, borderColor: '#F0E2D3', overflow: 'hidden', position: 'relative' },
   inactiveCardOpacity: { opacity: 0.55 },
