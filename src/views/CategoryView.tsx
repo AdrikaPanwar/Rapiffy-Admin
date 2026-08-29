@@ -31,7 +31,6 @@ import {
   asHttpUrl,
   asNumber,
   asText,
-  parseJsonSafe,
   extractProductsFromCategoryPayload,
   buildVariantRequest,
   buildAttributeTypes,
@@ -47,6 +46,14 @@ import {
   CatalogApiError,
   resolveAttributeTypes,
   buildAddVariantsBody,
+  asIsoDate,
+  parseAttributeTypesInput,
+  buildAddUnlistedBody,
+  buildUpdateProductBody,
+  findCategoryGroup,
+  firstSubCategoryId,
+  productsForSubCategory,
+  catalogSendJson,
   type CatalogProductItem,
   type ProductVariantItem,
   type ServerCategoryGroup,
@@ -214,7 +221,7 @@ const ProductDetailPopup = ({
       stockQuantity: parseInt(newVariantStock, 10) || 0,
       thresholdQuantity: 0,
       imageUrl: asHttpUrl(newVariantImage) || product.imageUrl,
-      expiryDate: product.expiryDate || '2026-07-26',
+      expiryDate: asIsoDate(product.expiryDate),
       shortDescription: product.shortDescription,
       attributes: primaryAttr || Object.keys(attributes).length ? attributes : { [attributeTypes[0]]: newVariantName.trim() },
     };
@@ -457,7 +464,7 @@ const ProductGridItem = React.memo(({ item, onOpenVariants, onEdit, onDelete, on
 
   const isVisible = item.active !== false;
   const safeName = String(item.productName || 'Product');
-  const safeBrand = String(item.brand || 'General');
+  const safeBrand = String(item.brand || '');
   const safeUnitVal = String(item.unitValue || '');
   const safeUnitType = String(item.unit || '');
 
@@ -520,9 +527,12 @@ const ProductGridItem = React.memo(({ item, onOpenVariants, onEdit, onDelete, on
       </View>
 
       <View style={styles.productDetailMetaFrame}>
-        <Text style={styles.brandMetaLabel} numberOfLines={1}>{safeBrand}</Text>
+        {safeBrand ? <Text style={styles.brandMetaLabel} numberOfLines={1}>{safeBrand}</Text> : null}
         <Text style={styles.productNameLabel} numberOfLines={2}>{safeName}</Text>
-        <Text style={styles.unitScaleTag}>{safeUnitVal} {safeUnitType}</Text>
+        {asText(item.subCategoryName) ? (
+          <Text style={styles.unitScaleTag} numberOfLines={1}>{item.subCategoryName}</Text>
+        ) : null}
+        <Text style={styles.unitScaleTag}>{[safeUnitVal, safeUnitType].filter(Boolean).join(' ')}</Text>
         {item.hasVariants && Array.isArray(item.variants) && item.variants.length > 0 ? (
           <Text style={styles.optionCountTag}>{item.variants.length} packs · tap to slide</Text>
         ) : null}
@@ -551,8 +561,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [categoryMetadataMap, setCategoryMetadataMap] = useState<Record<string, number>>({});
   const [selectedSubCategoryId, setSelectedSubCategoryId] = useState<number | null>(null);
+  const [formSubCategoryId, setFormSubCategoryId] = useState<number | null>(null);
   const [removedVariantIds, setRemovedVariantIds] = useState<number[]>([]);
-  const [prodAttributeTypes, setProdAttributeTypes] = useState<string[]>([]);
+  const [prodAttributeTypesInput, setProdAttributeTypesInput] = useState<string>('');
 
   const [isProductModalOpen, setIsProductModalOpen] = useState<boolean>(false);
   const [variantSheetProduct, setVariantSheetProduct] = useState<CatalogProductItem | null>(null);
@@ -574,14 +585,14 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   const [prodMrpInput, setProdMrpInput] = useState<string>('');
   const [prodStockQty, setProdStockQty] = useState<string>('0');
   const [prodThresholdQty, setProdThresholdQty] = useState<string>('0');
-  const [prodExpiryDate, setProdExpiryDate] = useState<string>('2026-07-26');
+  const [prodExpiryDate, setProdExpiryDate] = useState<string>('');
   const [prodHasVariants, setProdHasVariants] = useState<boolean>(false);
   const [productImageTarget, setProductImageTarget] = useState<string | null>(null);
 
   // FULL VARIANT INPUT STATES
   const [vNameInput, setVNameInput] = useState<string>('');
   const [vBrandInput, setVBrandInput] = useState<string>('');
-  const [vExpiryDate, setVExpiryDate] = useState<string>('2026-07-26');
+  const [vExpiryDate, setVExpiryDate] = useState<string>('');
   const [vUnitVal, setVUnitVal] = useState<string>('');
   const [vUnitType, setVUnitType] = useState<string>('Kg');
   const [vPriceInput, setVPriceInput] = useState<string>('');
@@ -604,7 +615,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
         if (tokenToUse && isMounted) {
           await syncInventoryFromServer(tokenToUse.trim());
         } else if (isMounted) {
-          setCatalogLoadError('Log in to load categories from GET /v1/admin/catalog/my-products.');
+          setCatalogLoadError(
+            mode === 'products'
+              ? 'Log in to load products from GET /v1/admin/catalog/my-products.'
+              : 'Log in to load categories from GET /v1/admin/catalog/my-products.'
+          );
           setCategoriesList([]);
           setServerGroups([]);
           setBackendCategoryFilteredProducts([]);
@@ -652,14 +667,17 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
           ? selectedCategoryName
           : String(extractedCategories[0]);
         setSelectedCategory(requested);
-        const firstGroup = normalizedGroups.find((group) => group.categoryName === requested) || normalizedGroups[0];
-        const firstSubId = firstGroup?.subCategories && firstGroup.subCategories.length > 0
-          ? firstGroup.subCategories[0].subCategoryId
+        const firstGroup = findCategoryGroup(normalizedGroups, requested) || normalizedGroups[0];
+        const currentSubId = selectedSubCategoryId && (firstGroup?.subCategories || []).some((sub) => sub.subCategoryId === selectedSubCategoryId)
+          ? selectedSubCategoryId
           : null;
-        setSelectedSubCategoryId(firstSubId);
-        const treeProducts = Array.isArray(firstGroup?.products) ? firstGroup.products : [];
+        setSelectedSubCategoryId(currentSubId);
+        const treeProducts = productsForSubCategory(firstGroup, currentSubId);
         setBackendCategoryFilteredProducts(treeProducts);
-        if (firstGroup && Array.isArray(firstGroup.subCategories) && firstGroup.subCategories.length > 0) {
+        if (currentSubId) {
+          const fetched = await fetchProductsBySubCategory(currentSubId, resolvedToken);
+          setBackendCategoryFilteredProducts(mergeUniqueProducts(treeProducts, fetched));
+        } else if (firstGroup && Array.isArray(firstGroup.subCategories) && firstGroup.subCategories.length > 0) {
           fetchProductsForCategoryGroup(firstGroup, resolvedToken, treeProducts);
         }
       } else {
@@ -725,20 +743,30 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   const handleCategoryClick = (categoryName: string) => {
     setSelectedCategory(categoryName);
     onOpenCategory?.(categoryName);
-    const matchedGroup = (Array.isArray(serverGroups) ? serverGroups : []).find(
-      (group) => group && group.categoryName === categoryName
-    );
-    const subCategories = matchedGroup && Array.isArray(matchedGroup.subCategories) ? matchedGroup.subCategories : [];
-    const firstSubId = subCategories.length > 0 ? subCategories[0].subCategoryId : null;
-    setSelectedSubCategoryId(firstSubId);
+    const matchedGroup = findCategoryGroup(serverGroups, categoryName);
+    setSelectedSubCategoryId(null);
     if (matchedGroup) {
-      const treeProducts = Array.isArray(matchedGroup.products) ? matchedGroup.products : [];
+      const treeProducts = productsForSubCategory(matchedGroup, null);
       setBackendCategoryFilteredProducts(treeProducts);
       fetchProductsForCategoryGroup(matchedGroup, undefined, treeProducts);
     } else {
       setBackendCategoryFilteredProducts([]);
     }
   };
+
+  const applySubCategoryFilter = useCallback(async (subCategoryId: number | null) => {
+    setSelectedSubCategoryId(subCategoryId);
+    const matchedGroup = findCategoryGroup(serverGroups, selectedCategory || selectedCategoryName);
+    const treeProducts = productsForSubCategory(matchedGroup, subCategoryId);
+    setBackendCategoryFilteredProducts(treeProducts);
+    if (!matchedGroup) return;
+    if (subCategoryId == null) {
+      await fetchProductsForCategoryGroup(matchedGroup, undefined, treeProducts);
+      return;
+    }
+    const fetched = await fetchProductsBySubCategory(subCategoryId);
+    setBackendCategoryFilteredProducts(mergeUniqueProducts(treeProducts, fetched));
+  }, [serverGroups, selectedCategory, selectedCategoryName, fetchProductsBySubCategory]);
 
   const openCategoryProducts = (categoryName: string) => {
     onOpenCategory?.(categoryName);
@@ -771,15 +799,20 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     );
 
     try {
-      const response = await fetch(adminCatalogUrls.visibility(shopProductId, nextActiveState), {
-        method: 'PATCH',
-        headers: catalogAuthHeaders(fastToken.trim())
-      });
-      if (!response.ok) {
-        console.log("Visibility sync error:", response.status);
-      }
+      await catalogSendJson(adminCatalogUrls.visibility(shopProductId, nextActiveState), fastToken.trim(), 'PATCH');
     } catch (error) {
-      console.log("Visibility sync error:", error);
+      const revertActiveState = currentActiveState;
+      setServerGroups(prevGroups => (Array.isArray(prevGroups) ? prevGroups : []).map(group => ({
+        ...group,
+        products: Array.isArray(group.products)
+          ? group.products.map(prod => prod.shopProductId === shopProductId ? { ...prod, active: revertActiveState } : prod)
+          : []
+      })));
+      setBackendCategoryFilteredProducts(prev =>
+        prev !== null ? prev.map(p => p.shopProductId === shopProductId ? { ...p, active: revertActiveState } : p) : null
+      );
+      const message = error instanceof CatalogApiError ? error.message : 'Could not update visibility.';
+      Alert.alert('Visibility failed', message);
     }
   }, [authToken]);
 
@@ -947,13 +980,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     setProdMrpInput(item.mrp != null ? item.mrp.toString() : '0');
     setProdStockQty(item.stockQuantity != null ? item.stockQuantity.toString() : '0');
     setProdThresholdQty(item.thresholdQuantity != null ? item.thresholdQuantity.toString() : '0');
-    setProdExpiryDate(item.expiryDate || '2026-07-26');
+    setProdExpiryDate(asIsoDate(item.expiryDate));
     setProdHasVariants(!!item.hasVariants || (Array.isArray(item.variants) && item.variants.length > 0));
-    setProductImageTarget(item.imageUrl === "string" ? null : item.imageUrl);
-    setProdAttributeTypes(Array.isArray(item.attributeTypes) ? item.attributeTypes : []);
-    if (item.subCategoryId) {
-      setSelectedSubCategoryId(item.subCategoryId);
-    }
+    setProductImageTarget(asHttpUrl(item.imageUrl));
+    setProdAttributeTypesInput(Array.isArray(item.attributeTypes) ? item.attributeTypes.filter(Boolean).join(', ') : '');
+    setFormSubCategoryId(item.subCategoryId || selectedSubCategoryId || firstSubCategoryId(findCategoryGroup(serverGroups, selectedCategory || selectedCategoryName)));
     
     setTempVariantsList(Array.isArray(item.variants) ? item.variants : []);
     setRemovedVariantIds([]);
@@ -975,14 +1006,14 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     setProdMrpInput('');
     setProdStockQty('0');
     setProdThresholdQty('0');
-    setProdExpiryDate('2026-07-26');
+    setProdExpiryDate('');
     setProdHasVariants(false);
     setProductImageTarget(null);
     setVariantImageTarget(null);
     
     setVNameInput('');
     setVBrandInput('');
-    setVExpiryDate('2026-07-26');
+    setVExpiryDate('');
     setVUnitVal('');
     setVUnitType('Kg');
     setVPriceInput('');
@@ -992,11 +1023,46 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
 
     setTempVariantsList([]);
     setRemovedVariantIds([]);
-    setProdAttributeTypes([]);
+    setProdAttributeTypesInput('');
+    setFormSubCategoryId(null);
     setIsEditingMode(false);
     setTargetEditProductId(null);
     setIsProductModalOpen(false);
   }, []);
+
+  const openAddProductModal = useCallback(() => {
+    setProdNameInput('');
+    setProdBrandInput('');
+    setProdShortDesc('');
+    setProdLongDesc('');
+    setProdUnitVal('');
+    setProdUnitType('Kg');
+    setProdPriceInput('');
+    setProdMrpInput('');
+    setProdStockQty('0');
+    setProdThresholdQty('0');
+    setProdExpiryDate('');
+    setProdHasVariants(false);
+    setProductImageTarget(null);
+    setVariantImageTarget(null);
+    setVNameInput('');
+    setVBrandInput('');
+    setVExpiryDate('');
+    setVUnitVal('');
+    setVUnitType('Kg');
+    setVPriceInput('');
+    setVMrpInput('');
+    setVStockQty('0');
+    setVThresholdQty('0');
+    setTempVariantsList([]);
+    setRemovedVariantIds([]);
+    setProdAttributeTypesInput('');
+    setIsEditingMode(false);
+    setTargetEditProductId(null);
+    const group = findCategoryGroup(serverGroups, selectedCategory || selectedCategoryName);
+    setFormSubCategoryId(selectedSubCategoryId || firstSubCategoryId(group));
+    setIsProductModalOpen(true);
+  }, [serverGroups, selectedCategory, selectedCategoryName, selectedSubCategoryId]);
 
   const saveOrUpdateProductWorkflow = async () => {
     if (!prodNameInput.trim() || !prodPriceInput.trim()) {
@@ -1007,125 +1073,97 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
     if (!fastToken) return;
 
-    const matchedGroup = (Array.isArray(serverGroups) ? serverGroups : []).find(
-      (group) => group && group.categoryName === selectedCategory
-    );
-    const groupSubId = matchedGroup && Array.isArray(matchedGroup.subCategories) && matchedGroup.subCategories.length > 0
-      ? matchedGroup.subCategories[0].subCategoryId
-      : null;
-    const resolvedSubCategoryId = selectedSubCategoryId || groupSubId;
+    const matchedGroup = findCategoryGroup(serverGroups, selectedCategory || selectedCategoryName);
+    const resolvedSubCategoryId = formSubCategoryId || firstSubCategoryId(matchedGroup);
 
     if (!isEditingMode && !resolvedSubCategoryId) {
-      Alert.alert("Subcategory required", "Select a category that has a subcategory before adding a product.");
+      Alert.alert("Subcategory required", "Pick a subcategory from GET /v1/admin/catalog/my-products before adding a product.");
       return;
     }
 
     const safeVariants = Array.isArray(tempVariantsList) ? tempVariantsList : [];
     const existingVariants = safeVariants.filter((variant) => asNumber(variant.id) > 0);
     const newVariants = safeVariants.filter((variant) => !variant.id || asNumber(variant.id) <= 0);
-    const attributeTypes = buildAttributeTypes(prodAttributeTypes, safeVariants);
-    const productImage = asHttpUrl(productImageTarget);
-
-    const productPayload: Record<string, any> = {
+    const attributeTypes = buildAttributeTypes(parseAttributeTypesInput(prodAttributeTypesInput), safeVariants);
+    const hasVariants = prodHasVariants || safeVariants.length > 0;
+    const writeFields = {
       productName: prodNameInput.trim(),
       sellingPrice: parseFloat(prodPriceInput) || 0,
       stockQuantity: parseInt(prodStockQty, 10) || 0,
       shortDescription: prodShortDesc.trim(),
       longDescription: prodLongDesc.trim(),
       brand: prodBrandInput.trim(),
+      imageUrl: asHttpUrl(productImageTarget),
       mrp: parseFloat(prodMrpInput) || parseFloat(prodPriceInput) || 0,
       thresholdQuantity: parseInt(prodThresholdQty, 10) || 0,
       unit: prodUnitType.trim(),
       unitValue: prodUnitVal.trim(),
-      expiryDate: prodExpiryDate || '2026-07-26',
-      hasVariants: prodHasVariants || safeVariants.length > 0,
+      expiryDate: asIsoDate(prodExpiryDate),
+      hasVariants,
+      attributeTypes,
     };
-    if (productImage) productPayload.imageUrl = productImage;
-    if (attributeTypes.length > 0) productPayload.attributeTypes = attributeTypes;
 
     setIsLoading(true);
     try {
-      const headers = catalogAuthHeaders(fastToken.trim(), true);
+      const token = fastToken.trim();
 
       if (isEditingMode && targetEditProductId !== null) {
         for (const variantId of removedVariantIds) {
-          const deleteResponse = await fetch(adminCatalogUrls.deleteVariant(variantId), {
-            method: 'DELETE',
-            headers: catalogAuthHeaders(fastToken.trim()),
-          });
-          if (!deleteResponse.ok) {
-            const errBody = parseJsonSafe(await deleteResponse.text()) || {};
-            Alert.alert("Server Rejected", errBody.message || "Could not delete a variant.");
-            return;
-          }
+          await catalogSendJson(adminCatalogUrls.deleteVariant(variantId), token, 'DELETE');
         }
 
-        const updatePayload = {
-          ...productPayload,
-          variants: existingVariants.map((variant) => buildVariantRequest(variant, prodBrandInput, prodExpiryDate)),
-        };
-        const updateResponse = await fetch(adminCatalogUrls.updateProduct(targetEditProductId), {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify(updatePayload),
-        });
-        if (!updateResponse.ok) {
-          const errBody = parseJsonSafe(await updateResponse.text()) || {};
-          Alert.alert("Server Rejected", errBody.message || "Failed to update product.");
-          return;
-        }
+        await catalogSendJson(
+          adminCatalogUrls.updateProduct(targetEditProductId),
+          token,
+          'PUT',
+          buildUpdateProductBody(writeFields),
+        );
 
         for (const variant of existingVariants) {
-          await fetch(adminCatalogUrls.updateVariant(variant.id), {
-            method: 'PUT',
-            headers,
-            body: JSON.stringify(buildVariantRequest(variant, prodBrandInput, prodExpiryDate)),
-          });
+          await catalogSendJson(
+            adminCatalogUrls.updateVariant(variant.id),
+            token,
+            'PUT',
+            buildVariantRequest(variant, prodBrandInput, prodExpiryDate),
+          );
         }
 
         if (newVariants.length > 0) {
-          const addVariantResponse = await fetch(adminCatalogUrls.addVariants(), {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              parentShopProductId: targetEditProductId,
-              attributeTypes: attributeTypes.length > 0 ? attributeTypes : ['Unit'],
-              variants: newVariants.map((variant) => buildVariantRequest(variant, prodBrandInput, prodExpiryDate)),
-            }),
+          await catalogSendJson(adminCatalogUrls.addVariants(), token, 'POST', {
+            parentShopProductId: targetEditProductId,
+            attributeTypes: attributeTypes.length > 0 ? attributeTypes : ['Flavour'],
+            variants: newVariants.map((variant) => buildVariantRequest(variant, prodBrandInput, prodExpiryDate)),
           });
-          if (!addVariantResponse.ok) {
-            const errBody = parseJsonSafe(await addVariantResponse.text()) || {};
-            Alert.alert("Server Rejected", errBody.message || "Product updated, but new variants were not added.");
-          }
         }
 
-        syncInventoryFromServer(fastToken.trim());
+        await syncInventoryFromServer(token);
+        if (selectedSubCategoryId) {
+          await applySubCategoryFilter(selectedSubCategoryId);
+        }
         closeFormAndWipeDataBuffers();
         Alert.alert("Success", "Product updated successfully!");
         return;
       }
 
-      const createPayload = {
-        ...productPayload,
-        subCategoryId: resolvedSubCategoryId,
-        variants: safeVariants.map((variant) => buildVariantRequest(variant, prodBrandInput, prodExpiryDate)),
-      };
-      const response = await fetch(adminCatalogUrls.addUnlisted(), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(createPayload),
-      });
+      await catalogSendJson(
+        adminCatalogUrls.addUnlisted(),
+        token,
+        'POST',
+        buildAddUnlistedBody(resolvedSubCategoryId as number, {
+          ...writeFields,
+          variants: safeVariants,
+        }),
+      );
 
-      if (response.status === 200 || response.status === 201) {
-        syncInventoryFromServer(fastToken.trim());
-        closeFormAndWipeDataBuffers();
-        Alert.alert("Success", "Product added successfully!");
-      } else {
-        const errBody = parseJsonSafe(await response.text()) || {};
-        Alert.alert("Server Rejected", errBody.message || "Failed to finalize catalog edits.");
+      await syncInventoryFromServer(token);
+      if (selectedSubCategoryId) {
+        await applySubCategoryFilter(selectedSubCategoryId);
       }
+      closeFormAndWipeDataBuffers();
+      Alert.alert("Success", "Product added successfully!");
     } catch (err) {
-      Alert.alert("Network Issue", "Failed synchronization loop.");
+      const message = err instanceof CatalogApiError ? err.message : 'Failed synchronization loop.';
+      Alert.alert(err instanceof CatalogApiError ? 'Server Rejected' : 'Network Issue', message);
     } finally {
       setIsLoading(false);
     }
@@ -1142,11 +1180,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       })));
       setBackendCategoryFilteredProducts(prev => (Array.isArray(prev) ? prev : []).filter(p => p.shopProductId !== idToDelete));
       
-      await fetch(adminCatalogUrls.visibility(idToDelete, false), {
-        method: 'PATCH',
-        headers: catalogAuthHeaders(fastToken.trim())
-      });
-    } catch (err) {}
+      await catalogSendJson(adminCatalogUrls.visibility(idToDelete, false), fastToken.trim(), 'PATCH');
+    } catch (err) {
+      const message = err instanceof CatalogApiError ? err.message : 'Could not hide this product.';
+      Alert.alert('Delete failed', message);
+    }
   }, [authToken]);
 
   const addVariantToTempList = useCallback(() => {
@@ -1168,13 +1206,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       stockQuantity: parseInt(vStockQty, 10) || 0,
       thresholdQuantity: parseInt(vThresholdQty, 10) || 0,
       imageUrl: asHttpUrl(variantImageTarget) || asHttpUrl(productImageTarget),
-      expiryDate: vExpiryDate || prodExpiryDate || '2026-07-26',
+      expiryDate: asIsoDate(vExpiryDate) || asIsoDate(prodExpiryDate),
       attributes,
     }]);
 
     setVNameInput('');
     setVBrandInput('');
-    setVExpiryDate('2026-07-26');
+    setVExpiryDate('');
     setVUnitVal('');
     setVUnitType('Kg');
     setVPriceInput('');
@@ -1196,6 +1234,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   }, []);
 
   const safeCategories = Array.isArray(categoriesList) ? categoriesList : [];
+  const activeCategoryGroup = useMemo(
+    () => findCategoryGroup(serverGroups, selectedCategory || selectedCategoryName),
+    [serverGroups, selectedCategory, selectedCategoryName],
+  );
+  const categorySubCategories = Array.isArray(activeCategoryGroup?.subCategories)
+    ? activeCategoryGroup.subCategories
+    : [];
 
   const filteredGridProducts = useMemo(() => {
     if (backendCategoryFilteredProducts !== null && Array.isArray(backendCategoryFilteredProducts)) {
@@ -1260,7 +1305,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
         {mode === 'products' ? (
           <TouchableOpacity
             style={[styles.rightPlusActionBtn, isProductModalOpen && { backgroundColor: '#2B1E1A' }]}
-            onPress={() => setIsProductModalOpen(true)}
+            onPress={openAddProductModal}
             activeOpacity={0.7}
           >
             <Text style={[styles.headerPlusText, isProductModalOpen && { color: '#FFFFFF' }]}>＋</Text>
@@ -1311,6 +1356,36 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
         </View>
       ) : (
         <View style={styles.rightProductGridPanel}>
+          {categorySubCategories.length > 0 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.subCategoryChipRow}
+            >
+              <TouchableOpacity
+                style={[styles.subCategoryChip, selectedSubCategoryId == null && styles.subCategoryChipActive]}
+                onPress={() => applySubCategoryFilter(null)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.subCategoryChipText, selectedSubCategoryId == null && styles.subCategoryChipTextActive]}>All</Text>
+              </TouchableOpacity>
+              {categorySubCategories.map((sub) => {
+                const isActive = selectedSubCategoryId === sub.subCategoryId;
+                return (
+                  <TouchableOpacity
+                    key={`sub_${sub.subCategoryId}`}
+                    style={[styles.subCategoryChip, isActive && styles.subCategoryChipActive]}
+                    onPress={() => applySubCategoryFilter(sub.subCategoryId)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[styles.subCategoryChipText, isActive && styles.subCategoryChipTextActive]} numberOfLines={1}>
+                      {asText(sub.subCategoryName) || `#${sub.subCategoryId}`}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          ) : null}
           {isLoading && (!filteredGridProducts || filteredGridProducts.length === 0) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
               <ActivityIndicator size="large" color="#D2691E" />
@@ -1354,6 +1429,29 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
             </View>
 
             <ScrollView style={{ marginTop: 10 }} showsVerticalScrollIndicator={false}>
+              {!isEditingMode && categorySubCategories.length > 0 ? (
+                <View>
+                  <Text style={styles.inputLabelField}>Subcategory *</Text>
+                  <View style={styles.formChipWrap}>
+                    {categorySubCategories.map((sub) => {
+                      const isActive = formSubCategoryId === sub.subCategoryId;
+                      return (
+                        <TouchableOpacity
+                          key={`form_sub_${sub.subCategoryId}`}
+                          style={[styles.subCategoryChip, isActive && styles.subCategoryChipActive]}
+                          onPress={() => setFormSubCategoryId(sub.subCategoryId)}
+                          activeOpacity={0.85}
+                        >
+                          <Text style={[styles.subCategoryChipText, isActive && styles.subCategoryChipTextActive]} numberOfLines={1}>
+                            {asText(sub.subCategoryName) || `#${sub.subCategoryId}`}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              ) : null}
+
               <Text style={styles.inputLabelField}>Product Image *</Text>
               <TouchableOpacity style={styles.imageSelectorPreviewContainer} onPress={pickImageFromDeviceGallery}>
                 {productImageTarget ? (
@@ -1373,7 +1471,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                 </View>
                 <View style={{ flex: 0.48 }}>
                   <Text style={styles.inputLabelField}>Expiry Date</Text>
-                  <TextInput style={styles.customTextInputRow} placeholder="2026-07-26" value={prodExpiryDate} onChangeText={setProdExpiryDate} />
+                  <TextInput style={styles.customTextInputRow} placeholder="YYYY-MM-DD" value={prodExpiryDate} onChangeText={setProdExpiryDate} />
                 </View>
               </View>
 
@@ -1436,6 +1534,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
               {prodHasVariants && (
                 <View style={styles.variantContainerBox}>
                   <Text style={styles.variantSectionHeaderTitle}>Add Variant Details</Text>
+                  <Text style={styles.inputLabelField}>Attribute types</Text>
+                  <TextInput
+                    style={styles.customTextInputRow}
+                    placeholder="Flavour, Size"
+                    value={prodAttributeTypesInput}
+                    onChangeText={setProdAttributeTypesInput}
+                  />
                   
                   {(Array.isArray(tempVariantsList) ? tempVariantsList : []).map((variant, vIdx) => (
                     <View key={vIdx} style={styles.miniVariantStripRow}>
@@ -1472,7 +1577,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                     </View>
                     <View style={{ flex: 0.48 }}>
                       <Text style={styles.inputLabelField}>Variant Expiry Date</Text>
-                      <TextInput style={styles.customTextInputRow} placeholder="2026-07-26" value={vExpiryDate} onChangeText={setVExpiryDate} />
+                      <TextInput style={styles.customTextInputRow} placeholder="YYYY-MM-DD" value={vExpiryDate} onChangeText={setVExpiryDate} />
                     </View>
                   </View>
 
@@ -1597,6 +1702,21 @@ const styles = StyleSheet.create({
   },
   categoryTileIconText: { fontSize: 20, fontWeight: '800', color: '#FFFBF7' },
   categoryTileLabel: { fontSize: 13, fontWeight: '800', color: '#2B1E1A', textAlign: 'center' },
+  subCategoryChipRow: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4, alignItems: 'center' },
+  formChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
+  subCategoryChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    backgroundColor: '#FFF5EA',
+    borderWidth: 1,
+    borderColor: '#F0E2D3',
+    marginRight: 8,
+    marginBottom: 6,
+  },
+  subCategoryChipActive: { backgroundColor: '#D2691E', borderColor: '#D2691E' },
+  subCategoryChipText: { fontSize: 12, fontWeight: '700', color: '#5C4033' },
+  subCategoryChipTextActive: { color: '#FFFBF7' },
   gridContainerVerticalPadding: { paddingHorizontal: 6, paddingTop: 8, paddingBottom: 110 },
   productBlockContainer: { flex: 1, backgroundColor: '#FFFBF7', margin: 5, borderRadius: 14, borderWidth: 1, borderColor: '#F0E2D3', overflow: 'hidden', position: 'relative' },
   inactiveCardOpacity: { opacity: 0.55 },

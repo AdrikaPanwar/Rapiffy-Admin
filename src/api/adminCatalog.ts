@@ -389,7 +389,7 @@ export const collectSubCategories = (group: any): SubCategoryItem[] => {
   return group.subCategories
     .map((sub: any) => ({
       subCategoryId: asNumber(sub?.subCategoryId),
-      subCategoryName: asText(sub?.subCategoryName) || 'General',
+      subCategoryName: asText(sub?.subCategoryName),
       products: Array.isArray(sub?.products)
         ? sub.products
             .map((prod: any) =>
@@ -406,19 +406,26 @@ export const collectSubCategories = (group: any): SubCategoryItem[] => {
     .filter((sub: SubCategoryItem) => sub.subCategoryId > 0);
 };
 
+export const asIsoDate = (value: any): string => {
+  const text = asText(value);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
+};
+
 export const buildVariantRequest = (variant: ProductVariantItem, fallbackBrand = '', fallbackExpiry = '') => {
   const attributes = { ...(variant.attributes || {}) };
   if (variant.unit && !attributes.unit) attributes.unit = variant.unit;
   if (variant.unitValue && !attributes.unitValue) attributes.unitValue = variant.unitValue;
   const payload: Record<string, any> = {
     variantName: asText(variant.variantName) || 'Variant',
-    brand: asText(variant.brand) || asText(fallbackBrand),
     mrp: asNumber(variant.mrp, asNumber(variant.sellingPrice)),
     sellingPrice: asNumber(variant.sellingPrice),
     stockQuantity: asNumber(variant.stockQuantity),
     thresholdQuantity: asNumber(variant.thresholdQuantity),
-    expiryDate: asText(variant.expiryDate) || asText(fallbackExpiry),
   };
+  const brand = asText(variant.brand) || asText(fallbackBrand);
+  if (brand) payload.brand = brand;
+  const expiry = asIsoDate(variant.expiryDate) || asIsoDate(fallbackExpiry);
+  if (expiry) payload.expiryDate = expiry;
   if (variant.id) payload.id = variant.id;
   if (asText(variant.shortDescription)) payload.shortDescription = asText(variant.shortDescription);
   if (asText(variant.longDescription)) payload.longDescription = asText(variant.longDescription);
@@ -426,6 +433,116 @@ export const buildVariantRequest = (variant: ProductVariantItem, fallbackBrand =
   if (asHttpUrl(variant.imageUrl)) payload.imageUrl = asHttpUrl(variant.imageUrl);
   if (Object.keys(attributes).length > 0) payload.attributes = attributes;
   return payload;
+};
+
+export type ShopProductWriteFields = {
+  productName?: string;
+  shortDescription?: string;
+  longDescription?: string;
+  brand?: string;
+  imageUrl?: string | null;
+  mrp?: number;
+  sellingPrice?: number;
+  stockQuantity?: number;
+  thresholdQuantity?: number;
+  unit?: string;
+  unitValue?: string;
+  expiryDate?: string | null;
+  hasVariants?: boolean;
+  attributeTypes?: string[];
+  variants?: ProductVariantItem[];
+};
+
+export const parseAttributeTypesInput = (value: string): string[] =>
+  String(value || '')
+    .split(',')
+    .map((item) => asText(item))
+    .filter(Boolean);
+
+export const buildShopProductWriteBody = (
+  fields: ShopProductWriteFields,
+  fallbackBrand = '',
+): Record<string, any> => {
+  const body: Record<string, any> = {};
+  if (asText(fields.productName)) body.productName = asText(fields.productName);
+  if (asText(fields.shortDescription)) body.shortDescription = asText(fields.shortDescription);
+  if (asText(fields.longDescription)) body.longDescription = asText(fields.longDescription);
+  if (asText(fields.brand)) body.brand = asText(fields.brand);
+  if (asHttpUrl(fields.imageUrl)) body.imageUrl = asHttpUrl(fields.imageUrl);
+  if (fields.mrp != null) body.mrp = asNumber(fields.mrp);
+  if (fields.sellingPrice != null) body.sellingPrice = asNumber(fields.sellingPrice);
+  if (fields.stockQuantity != null) body.stockQuantity = asNumber(fields.stockQuantity);
+  if (fields.thresholdQuantity != null) body.thresholdQuantity = asNumber(fields.thresholdQuantity);
+  if (asText(fields.unit)) body.unit = asText(fields.unit);
+  if (asText(fields.unitValue)) body.unitValue = asText(fields.unitValue);
+  const expiry = asIsoDate(fields.expiryDate);
+  if (expiry) body.expiryDate = expiry;
+  if (typeof fields.hasVariants === 'boolean') body.hasVariants = fields.hasVariants;
+  const types = (fields.attributeTypes || []).map(asText).filter(Boolean);
+  if (types.length > 0) body.attributeTypes = types;
+  if (Array.isArray(fields.variants) && fields.variants.length > 0) {
+    body.variants = fields.variants.map((variant) =>
+      buildVariantRequest(variant, asText(fields.brand) || fallbackBrand, expiry)
+    );
+  }
+  return body;
+};
+
+export const buildAddUnlistedBody = (
+  subCategoryId: number,
+  fields: ShopProductWriteFields,
+): Record<string, any> => ({
+  subCategoryId,
+  ...buildShopProductWriteBody(fields),
+});
+
+export const buildUpdateProductBody = (fields: ShopProductWriteFields): Record<string, any> =>
+  buildShopProductWriteBody(fields);
+
+export const findCategoryGroup = (
+  groups: ServerCategoryGroup[] | null | undefined,
+  categoryName: string,
+): ServerCategoryGroup | null => {
+  const name = asText(categoryName);
+  if (!name || !Array.isArray(groups)) return null;
+  return groups.find((group) => group && group.categoryName === name) || null;
+};
+
+export const firstSubCategoryId = (group: ServerCategoryGroup | null | undefined): number | null => {
+  const first = (group?.subCategories || []).find((sub) => asNumber(sub.subCategoryId) > 0);
+  return first ? first.subCategoryId : null;
+};
+
+export const productsForSubCategory = (
+  group: ServerCategoryGroup | null | undefined,
+  subCategoryId: number | null,
+): CatalogProductItem[] => {
+  if (!group) return [];
+  const nested = (group.subCategories || []).flatMap((sub) => (Array.isArray(sub.products) ? sub.products : []));
+  if (subCategoryId == null || subCategoryId <= 0) {
+    return mergeUniqueProducts(group.products, nested);
+  }
+  const matchedNested = (group.subCategories || [])
+    .filter((sub) => sub.subCategoryId === subCategoryId)
+    .flatMap((sub) => (Array.isArray(sub.products) ? sub.products : []));
+  const matchedTop = (Array.isArray(group.products) ? group.products : []).filter(
+    (item) => item.subCategoryId === subCategoryId
+  );
+  return mergeUniqueProducts(matchedTop, matchedNested);
+};
+
+export const catalogSendJson = async (
+  url: string,
+  token: string,
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+  body?: Record<string, any>,
+): Promise<any> => {
+  const response = await fetch(url, {
+    method,
+    headers: catalogAuthHeaders(token, body != null && method !== 'GET'),
+    body: body != null && method !== 'GET' ? JSON.stringify(body) : undefined,
+  });
+  return readCatalogJson(response);
 };
 
 export const buildAttributeTypes = (productTypes?: string[], variants: ProductVariantItem[] = []): string[] => {
