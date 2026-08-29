@@ -1269,7 +1269,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       ) : (
         <View style={styles.rightProductGridPanel}>
           <View style={styles.searchBox}>
-            <Svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#A89685" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <Svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5C4033" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
               <Path d="M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z" />
               <Path d="m21 21-4.3-4.3" />
             </Svg>
@@ -1281,8 +1281,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
               onChangeText={setProductSearchQuery}
             />
           </View>
-          {catalogSubCategories.length > 0 ? (
-            <ScrollView
+          <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.subCategoryChipRow}
@@ -1310,7 +1309,6 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
                 );
               })}
             </ScrollView>
-          ) : null}
           {isLoading && (!filteredGridProducts || filteredGridProducts.length === 0) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
               <ActivityIndicator size="large" color="#D2691E" />
