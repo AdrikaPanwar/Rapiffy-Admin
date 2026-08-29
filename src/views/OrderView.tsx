@@ -17,7 +17,7 @@ import Svg, { Path } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { BottomNavBar } from '../components/BottomNavBar';
+import { BottomNavBar, type AppScreen } from '../components/BottomNavBar';
 import { adminAuthHeaders, adminOrderUrls, statusUpdateUrl, type AdminOrderStatusAction } from '../api/adminOrders';
 
 const STATUS_FILTERS = [
@@ -104,7 +104,7 @@ export interface InvoiceInfo {
 }
 
 export interface OrderViewProps {
-  onNavigate?: (screen: 'login' | 'forgot_password' | 'home' | 'category' | 'coverage' | 'order' | 'profile') => void;
+  onNavigate?: (screen: AppScreen) => void;
   authToken?: string;
 }
 

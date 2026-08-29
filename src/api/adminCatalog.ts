@@ -355,8 +355,8 @@ export const parseMyProductsTree = (payload: any): ServerCategoryGroup[] => {
       if (!group || typeof group !== 'object') return null;
       const subCategories = collectSubCategories(group);
       const products = extractProductsFromCategoryPayload(group);
-      const categoryName = asText(group.categoryName) || 'General';
-      if (!group.categoryId && subCategories.length === 0 && products.length === 0 && !asText(group.categoryName)) {
+      const categoryName = asText(group.categoryName);
+      if (!categoryName) {
         return null;
       }
       return {

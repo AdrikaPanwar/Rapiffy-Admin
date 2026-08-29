@@ -117,6 +117,9 @@ const ignoredCategory = extractProductsFromCategoryPayload({
 });
 assert(ignoredCategory.length === 0, 'empty category groups should not become products');
 
+const unnamedDropped = parseMyProductsTree([{ categoryId: 9, subCategories: [], products: [] }]);
+assert(unnamedDropped.length === 0, 'categories without API categoryName must not be invented');
+
 assert(resolveAttributeTypes(amul).join(',') === 'Flavour', 'attribute types should come from the API product');
 const addBody = buildAddVariantsBody(amul, {
   id: 0,

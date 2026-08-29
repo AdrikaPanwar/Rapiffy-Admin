@@ -5,7 +5,7 @@ import { AdminLoginView } from '../views/AdminLoginView';
 import { ForgotPasswordView } from '../views/ForgotPasswordView';
 import { HomeView } from '../views/HomeView';
 import { CategoryView } from '../views/CategoryView';
-import { CoverageView } from '../views/CoverageView';
+import { ProductView } from '../views/ProductView';
 import { OrderView } from '../views/OrderView';
 import { ProfileView } from '../views/ProfileView';
 
@@ -13,7 +13,7 @@ const BASE_URL = 'https://rapiffy-backend-1.onrender.com';
 const LOGIN_API_URL = `${BASE_URL}/v1/auth/login`;
 
 export const AdminLoginController: React.FC = () => {
-  const [currentScreen, setCurrentScreen] = useState<'login' | 'forgot_password' | 'home' | 'category' | 'coverage' | 'order' | 'profile'>('login');
+  const [currentScreen, setCurrentScreen] = useState<'login' | 'forgot_password' | 'home' | 'category' | 'product' | 'order' | 'profile'>('login');
   const [isInitialChecking, setIsInitialChecking] = useState<boolean>(true);
 
   // Input states
@@ -26,7 +26,8 @@ export const AdminLoginController: React.FC = () => {
   const [isPasswordHidden, setIsPasswordHidden] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [lockedIdentity, setLockedIdentity] = useState<string>('');
-  const [authToken, setAuthToken] = useState<string>(''); 
+  const [authToken, setAuthToken] = useState<string>('');
+  const [catalogCategory, setCatalogCategory] = useState<string>(''); 
 
   // Toast Notification States
   const [loginToastMessage, setLoginToastMessage] = useState<string>('');
@@ -218,10 +219,24 @@ export const AdminLoginController: React.FC = () => {
       return <HomeView userCredential={lockedIdentity} onNavigate={(screen) => setCurrentScreen(screen)} />; 
     }
     if (currentScreen === 'category') {
-      return <CategoryView onNavigate={(screen) => setCurrentScreen(screen)} authToken={authToken} />;
+      return (
+        <CategoryView
+          mode="categories"
+          authToken={authToken}
+          onOpenCategory={setCatalogCategory}
+          onNavigate={(screen) => setCurrentScreen(screen)}
+        />
+      );
     }
-    if (currentScreen === 'coverage') {
-      return <CoverageView onNavigate={(screen) => setCurrentScreen(screen)} />;
+    if (currentScreen === 'product') {
+      return (
+        <ProductView
+          authToken={authToken}
+          selectedCategoryName={catalogCategory}
+          onOpenCategory={setCatalogCategory}
+          onNavigate={(screen) => setCurrentScreen(screen)}
+        />
+      );
     }
     if (currentScreen === 'order') {
       return <OrderView onNavigate={(screen) => setCurrentScreen(screen)} authToken={authToken} />;
