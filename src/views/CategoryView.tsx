@@ -602,8 +602,12 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
 
         if (tokenToUse && isMounted) {
           await syncInventoryFromServer(tokenToUse.trim());
-        } else {
-          if (isMounted) setIsLoading(false);
+        } else if (isMounted) {
+          setCatalogLoadError('Log in to load categories from GET /v1/admin/catalog/my-products.');
+          setCategoriesList([]);
+          setServerGroups([]);
+          setBackendCategoryFilteredProducts([]);
+          setIsLoading(false);
         }
       } catch (err) {
         if (isMounted) setIsLoading(false);
@@ -630,7 +634,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       
       const extractedCategories = normalizedGroups
         .map((group) => group.categoryName)
-        .filter(Boolean);
+        .filter((name) => Boolean(asText(name)));
       
       setCategoriesList(extractedCategories);
 
@@ -1205,12 +1209,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
 
     const groups = Array.isArray(serverGroups) ? serverGroups : [];
     if (groups.length === 0) return [];
-    
-    const activeCat = selectedCategory || (safeCategories.length > 0 ? safeCategories[0] : "");
+
+    const activeCat = selectedCategory || '';
+    if (!activeCat) return [];
     const matchedGroup = groups.find(
-      group => group && group.categoryName === activeCat
-    ) || groups[0];
-    
+      (group) => group && group.categoryName === activeCat
+    );
+
     return matchedGroup && Array.isArray(matchedGroup.products) ? matchedGroup.products : [];
   }, [backendCategoryFilteredProducts, serverGroups, selectedCategory, safeCategories]);
 
@@ -1280,7 +1285,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
           ) : safeCategories.length === 0 ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
               <Text style={{ fontSize: 13, color: '#5C4033', fontWeight: '700', textAlign: 'center' }}>
-                {catalogLoadError || 'No categories found.'}
+                {catalogLoadError || 'No categories returned from GET /v1/admin/catalog/my-products.'}
               </Text>
             </View>
           ) : (
@@ -1291,7 +1296,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.categoryGridPadding}
               renderItem={({ item }) => {
-                const safeCatName = String(item || 'General');
+                const safeCatName = String(item || '').trim();
+                if (!safeCatName) return null;
                 return (
                   <TouchableOpacity
                     style={styles.categoryTile}

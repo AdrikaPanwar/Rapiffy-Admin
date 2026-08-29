@@ -55,9 +55,11 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({ onNavigate, currentA
           activeOpacity={0.7}
         >
           <Svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={currentActive === 'product' ? '#D2691E' : '#2B1E1A'} strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
-            <Path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-            <Path d="M3.27 6.96 12 12.01l8.73-5.05" />
-            <Path d="M12 22.08V12" />
+            <Rect width="18" height="18" x={3} y={3} rx={2} />
+            <Path d="M7 7h.01" />
+            <Path d="M17 7h.01" />
+            <Path d="M7 17h.01" />
+            <Path d="M17 17h.01" />
           </Svg>
           <Text style={[styles.navLabelText, currentActive === 'product' && { color: '#D2691E' }]}>Product</Text>
         </TouchableOpacity>
