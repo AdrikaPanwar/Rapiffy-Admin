@@ -558,6 +558,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
 
   const [selectedSubCategoryId, setSelectedSubCategoryId] = useState<number | null>(incomingSubCategoryId);
   const [productSearchQuery, setProductSearchQuery] = useState<string>('');
+  const [isSubFilterOpen, setIsSubFilterOpen] = useState(false);
   const [formSubCategoryId, setFormSubCategoryId] = useState<number | null>(null);
   const [removedVariantIds, setRemovedVariantIds] = useState<number[]>([]);
   const [prodAttributeTypesInput, setProdAttributeTypesInput] = useState<string>('');
@@ -1176,6 +1177,15 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   }, []);
 
   const catalogSubCategories = useMemo(() => flattenSubCategories(serverGroups), [serverGroups]);
+  const selectedSubFilterLabel = useMemo(() => {
+    if (selectedSubCategoryId == null) return 'All';
+    const match = catalogSubCategories.find((sub) => sub.subCategoryId === selectedSubCategoryId);
+    return asText(match?.subCategoryName) || `#${selectedSubCategoryId}`;
+  }, [catalogSubCategories, selectedSubCategoryId]);
+
+  useEffect(() => {
+    if (isProductModalOpen) setIsSubFilterOpen(false);
+  }, [isProductModalOpen]);
 
   const filteredGridProducts = useMemo(() => {
     const source = Array.isArray(backendCategoryFilteredProducts)
@@ -1294,34 +1304,54 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
               onChangeText={setProductSearchQuery}
             />
           </View>
-          <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.subCategoryChipRow}
+          <View style={styles.subFilterBlock}>
+            <TouchableOpacity
+              style={styles.subFilterTrigger}
+              onPress={() => setIsSubFilterOpen((open) => !open)}
+              activeOpacity={0.85}
             >
-              <TouchableOpacity
-                style={[styles.subCategoryChip, selectedSubCategoryId == null && styles.subCategoryChipActive]}
-                onPress={() => applySubCategoryFilter(null)}
-                activeOpacity={0.85}
-              >
-                <Text style={[styles.subCategoryChipText, selectedSubCategoryId == null && styles.subCategoryChipTextActive]}>All</Text>
-              </TouchableOpacity>
-              {catalogSubCategories.map((sub) => {
-                const isActive = selectedSubCategoryId === sub.subCategoryId;
-                return (
+              <Text style={styles.subFilterTriggerLabel} numberOfLines={1}>{selectedSubFilterLabel}</Text>
+              <Text style={styles.subFilterChevron}>{isSubFilterOpen ? '▲' : '▼'}</Text>
+            </TouchableOpacity>
+            {isSubFilterOpen ? (
+              <View style={styles.subFilterDropdown}>
+                <ScrollView
+                  style={styles.subFilterScroll}
+                  nestedScrollEnabled
+                  keyboardShouldPersistTaps="handled"
+                >
                   <TouchableOpacity
-                    key={`sub_${sub.subCategoryId}`}
-                    style={[styles.subCategoryChip, isActive && styles.subCategoryChipActive]}
-                    onPress={() => applySubCategoryFilter(sub.subCategoryId)}
+                    style={[styles.subFilterOption, selectedSubCategoryId == null && styles.subFilterOptionActive]}
+                    onPress={() => {
+                      setIsSubFilterOpen(false);
+                      applySubCategoryFilter(null);
+                    }}
                     activeOpacity={0.85}
                   >
-                    <Text style={[styles.subCategoryChipText, isActive && styles.subCategoryChipTextActive]} numberOfLines={1}>
-                      {asText(sub.subCategoryName) || `#${sub.subCategoryId}`}
-                    </Text>
+                    <Text style={[styles.subFilterOptionText, selectedSubCategoryId == null && styles.subFilterOptionTextActive]}>All</Text>
                   </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+                  {catalogSubCategories.map((sub) => {
+                    const isActive = selectedSubCategoryId === sub.subCategoryId;
+                    return (
+                      <TouchableOpacity
+                        key={`sub_opt_${sub.subCategoryId}`}
+                        style={[styles.subFilterOption, isActive && styles.subFilterOptionActive]}
+                        onPress={() => {
+                          setIsSubFilterOpen(false);
+                          applySubCategoryFilter(sub.subCategoryId);
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={[styles.subFilterOptionText, isActive && styles.subFilterOptionTextActive]} numberOfLines={1}>
+                          {asText(sub.subCategoryName) || `#${sub.subCategoryId}`}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : null}
+          </View>
           {isLoading && (!filteredGridProducts || filteredGridProducts.length === 0) ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
               <ActivityIndicator size="large" color="#D2691E" />
@@ -1660,6 +1690,39 @@ const styles = StyleSheet.create({
     color: '#2B1E1A',
     paddingVertical: 0,
   },
+  subFilterBlock: { marginHorizontal: 12, marginTop: 8, marginBottom: 4, zIndex: 20 },
+  subFilterTrigger: {
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F0E2D3',
+    backgroundColor: '#FFFBF7',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  subFilterTriggerLabel: { flex: 1, fontSize: 13, fontWeight: '700', color: '#2B1E1A', marginRight: 8 },
+  subFilterChevron: { fontSize: 10, fontWeight: '800', color: '#D2691E' },
+  subFilterDropdown: {
+    marginTop: 6,
+    maxHeight: 220,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F0E2D3',
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    elevation: 8,
+    shadowColor: '#2B1E1A',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  subFilterScroll: { maxHeight: 220 },
+  subFilterOption: { paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F7EFE5' },
+  subFilterOptionActive: { backgroundColor: '#FFF5EA' },
+  subFilterOptionText: { fontSize: 13, fontWeight: '700', color: '#5C4033' },
+  subFilterOptionTextActive: { color: '#D2691E' },
   subCategoryChipRow: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4, alignItems: 'center' },
   formChipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
   subCategoryChip: {
