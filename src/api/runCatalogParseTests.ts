@@ -8,6 +8,13 @@ import {
   mergeUniqueProducts,
   resolveAttributeTypes,
   buildAddVariantsBody,
+  buildAddUnlistedBody,
+  buildUpdateProductBody,
+  buildVariantRequest,
+  productsForSubCategory,
+  firstSubCategoryId,
+  parseAttributeTypesInput,
+  asIsoDate,
 } from './adminCatalog';
 
 const assert = (condition: unknown, message: string) => {
@@ -150,5 +157,63 @@ assert(addBody.parentShopProductId === 101, 'parentShopProductId must be the API
 assert(addBody.attributeTypes[0] === 'Flavour', 'POST variants requires attributeTypes');
 assert(addBody.variants[0].variantName === 'Butterscotch', 'new variant payload mapping failed');
 assert(addBody.variants[0].id == null, 'new variants must not send an id');
+
+assert(asIsoDate('2026-08-29') === '2026-08-29', 'valid expiry date should pass through');
+assert(asIsoDate('string') === '', 'swagger placeholder dates must be dropped');
+assert(asIsoDate('2026-07-26T00:00:00') === '', 'non-date expiry must be dropped');
+assert(parseAttributeTypesInput('Flavour, Size').join(',') === 'Flavour,Size', 'attribute type CSV parse failed');
+
+const unnamedSub = parseMyProductsTree([{
+  categoryId: 4,
+  categoryName: 'Dairy',
+  subCategories: [{ subCategoryId: 18, products: [] }],
+}]);
+assert(unnamedSub[0].subCategories?.[0].subCategoryName === '', 'unnamed subcategories must not become General');
+
+assert(firstSubCategoryId(tree[0]) === 18, 'first subcategory id should come from the tree');
+assert(productsForSubCategory(tree[0], null).length === 1, 'All should keep tree products');
+assert(productsForSubCategory(tree[0], 18)[0].shopProductId === 101, 'subcategory filter should keep matching products');
+assert(productsForSubCategory(tree[0], 99).length === 0, 'unknown subcategory must not invent products');
+
+const addUnlisted = buildAddUnlistedBody(18, {
+  productName: 'Farm Milk',
+  sellingPrice: 42,
+  stockQuantity: 6,
+  brand: 'Amul',
+  expiryDate: 'not-a-date',
+  imageUrl: 'file://local-photo.jpg',
+});
+assert(addUnlisted.subCategoryId === 18, 'POST add-unlisted requires subCategoryId');
+assert(addUnlisted.productName === 'Farm Milk', 'add-unlisted productName mapping failed');
+assert(addUnlisted.expiryDate == null, 'invalid expiryDate must not be sent');
+assert(addUnlisted.imageUrl == null, 'non-http imageUrl must not be sent');
+
+const updateBody = buildUpdateProductBody({
+  productName: 'Farm Milk',
+  sellingPrice: 45,
+  hasVariants: true,
+  attributeTypes: ['Flavour'],
+});
+assert(updateBody.productName === 'Farm Milk', 'PUT update productName mapping failed');
+assert(updateBody.hasVariants === true, 'PUT update must send hasVariants');
+assert(!('subCategoryId' in updateBody), 'PUT update must not send subCategoryId');
+
+const variantPut = buildVariantRequest({
+  id: 11,
+  variantName: 'Vanilla',
+  brand: 'Amul',
+  unit: '',
+  unitValue: '',
+  mrp: 180,
+  sellingPrice: 145,
+  stockQuantity: 12,
+  thresholdQuantity: 2,
+  imageUrl: null,
+  expiryDate: '',
+  attributes: { Flavour: 'Vanilla' },
+});
+assert(variantPut.id === 11, 'PUT variant should include saved id');
+assert(variantPut.expiryDate == null, 'PUT variant must omit empty expiryDate');
+assert(variantPut.attributes.Flavour === 'Vanilla', 'PUT variant attributes mapping failed');
 
 console.log('catalog parse tests passed');
