@@ -615,7 +615,11 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
         if (tokenToUse && isMounted) {
           await syncInventoryFromServer(tokenToUse.trim());
         } else if (isMounted) {
-          setCatalogLoadError('Log in to load categories from GET /v1/admin/catalog/my-products.');
+          setCatalogLoadError(
+            mode === 'products'
+              ? 'Log in to load products from GET /v1/admin/catalog/my-products.'
+              : 'Log in to load categories from GET /v1/admin/catalog/my-products.'
+          );
           setCategoriesList([]);
           setServerGroups([]);
           setBackendCategoryFilteredProducts([]);
