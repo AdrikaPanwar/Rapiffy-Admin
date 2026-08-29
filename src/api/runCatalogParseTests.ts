@@ -240,4 +240,15 @@ assert(productsAcrossTree(shopTree, 21).every((item) => item.shopProductId === 1
 assert(filterProductsBySearch(productsAcrossTree(shopTree, null), 'amul').length === 1, 'search should match product or brand');
 assert(filterProductsBySearch(productsAcrossTree(shopTree, null), 'cloth').length === 0, 'search must not treat category names like Cloth as products');
 
+const namedFromApi = flattenSubCategories(parseMyProductsTree([{
+  categoryId: 8,
+  categoryName: 'Cloth',
+  subCategories: [
+    { subCategoryId: 31, subCategoryName: 'shirt for men', products: [{ shopProductId: 4, productName: 'Formal Shirt' }] },
+    { subCategoryId: 32, subCategoryName: 'shirt for women', products: [{ shopProductId: 5, productName: 'women shirt pr 1' }] },
+  ],
+}]));
+assert(namedFromApi.map((tile) => tile.subCategoryName).join('|') === 'shirt for men|shirt for women', 'category tiles must use API subCategoryName only');
+assert(namedFromApi.every((tile) => tile.subCategoryName !== 'Cloth'), 'parent categoryName must not become a subcategory tile');
+
 console.log('catalog parse tests passed');
