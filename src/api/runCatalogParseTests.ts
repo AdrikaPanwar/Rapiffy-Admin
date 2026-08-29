@@ -5,6 +5,7 @@ import {
   getVariantPackLabel,
   getVariantTitle,
   parseMyProductsTree,
+  mergeUniqueProducts,
   resolveAttributeTypes,
   buildAddVariantsBody,
 } from './adminCatalog';
@@ -119,6 +120,16 @@ assert(ignoredCategory.length === 0, 'empty category groups should not become pr
 
 const unnamedDropped = parseMyProductsTree([{ categoryId: 9, subCategories: [], products: [] }]);
 assert(unnamedDropped.length === 0, 'categories without API categoryName must not be invented');
+
+const jeans = { shopProductId: 1, productName: 'Jeans' } as any;
+const shirt = { shopProductId: 2, productName: 'women shirt pr 1' } as any;
+const shrunk = mergeUniqueProducts([jeans, shirt], [shirt]);
+assert(shrunk.length === 2, 'subcategory refresh must not drop tree products');
+assert(shrunk[0].shopProductId === 1 && shrunk[1].shopProductId === 2, 'tree product order should stay');
+const emptyRefresh = mergeUniqueProducts([jeans, shirt], []);
+assert(emptyRefresh.length === 2, 'empty subcategory fetch must keep tree products');
+const extra = mergeUniqueProducts([jeans], [{ shopProductId: 3, productName: 'New' } as any]);
+assert(extra.length === 2 && extra[1].shopProductId === 3, 'subcategory fetch can add extra API products');
 
 assert(resolveAttributeTypes(amul).join(',') === 'Flavour', 'attribute types should come from the API product');
 const addBody = buildAddVariantsBody(amul, {

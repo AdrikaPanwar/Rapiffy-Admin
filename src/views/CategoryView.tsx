@@ -42,6 +42,7 @@ import {
   getProductVariantOptions,
   findProductById,
   parseMyProductsTree,
+  mergeUniqueProducts,
   readCatalogJson,
   CatalogApiError,
   resolveAttributeTypes,
@@ -698,12 +699,16 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     overrideToken?: string,
     fallbackProducts?: CatalogProductItem[]
   ) => {
-    const treeProducts = Array.isArray(fallbackProducts)
-      ? fallbackProducts
-      : (Array.isArray(group.products) ? group.products : []);
+    const nestedSubProducts = (Array.isArray(group.subCategories) ? group.subCategories : [])
+      .flatMap((sub) => (Array.isArray(sub.products) ? sub.products : []));
+    const treeProducts = mergeUniqueProducts(
+      fallbackProducts,
+      group.products,
+      nestedSubProducts,
+    );
     const subCategories = Array.isArray(group.subCategories) ? group.subCategories : [];
+    setBackendCategoryFilteredProducts(treeProducts);
     if (subCategories.length === 0) {
-      setBackendCategoryFilteredProducts(treeProducts);
       return;
     }
 
@@ -711,17 +716,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       const lists = await Promise.all(
         subCategories.map((sub) => fetchProductsBySubCategory(sub.subCategoryId, overrideToken))
       );
-      const merged: CatalogProductItem[] = [];
-      const seen = new Set<number>();
-      lists.forEach((list) => {
-        list.forEach((item) => {
-          if (!seen.has(item.shopProductId)) {
-            seen.add(item.shopProductId);
-            merged.push(item);
-          }
-        });
-      });
-      setBackendCategoryFilteredProducts(merged.length > 0 ? merged : treeProducts);
+      setBackendCategoryFilteredProducts(mergeUniqueProducts(treeProducts, ...lists));
     } catch (error) {
       setBackendCategoryFilteredProducts(treeProducts);
     }

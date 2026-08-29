@@ -348,6 +348,21 @@ export const extractProductsFromCategoryPayload = (payload: any): CatalogProduct
   return products;
 };
 
+export const mergeUniqueProducts = (
+  ...lists: Array<CatalogProductItem[] | null | undefined>
+): CatalogProductItem[] => {
+  const merged: CatalogProductItem[] = [];
+  const seen = new Set<number>();
+  lists.forEach((list) => {
+    (Array.isArray(list) ? list : []).forEach((item) => {
+      if (!item || !item.shopProductId || seen.has(item.shopProductId)) return;
+      seen.add(item.shopProductId);
+      merged.push(item);
+    });
+  });
+  return merged;
+};
+
 export const parseMyProductsTree = (payload: any): ServerCategoryGroup[] => {
   const rows = unwrapCategoryList(payload);
   return rows
