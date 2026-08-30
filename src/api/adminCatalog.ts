@@ -611,6 +611,38 @@ export const catalogSendJson = async (
   return readCatalogJson(response);
 };
 
+/** GET /v1/admin/catalog/my-products */
+export const catalogGetMyProducts = (token: string): Promise<any> =>
+  catalogSendJson(adminCatalogUrls.tree(), token, 'GET');
+
+/** GET /v1/admin/catalog/my-products/sub-category/{subCategoryId} */
+export const catalogGetBySubCategory = (token: string, subCategoryId: number): Promise<any> =>
+  catalogSendJson(adminCatalogUrls.bySubCategory(subCategoryId), token, 'GET');
+
+/** POST /v1/admin/catalog/add-unlisted */
+export const catalogAddUnlisted = (token: string, body: Record<string, any>): Promise<any> =>
+  catalogSendJson(adminCatalogUrls.addUnlisted(), token, 'POST', body);
+
+/** PUT /v1/admin/catalog/update/{shopProductId} */
+export const catalogUpdateProduct = (token: string, shopProductId: number, body: Record<string, any>): Promise<any> =>
+  catalogSendJson(adminCatalogUrls.updateProduct(shopProductId), token, 'PUT', body);
+
+/** PATCH /v1/admin/catalog/visibility/{shopProductId}?active= */
+export const catalogSetVisibility = (token: string, shopProductId: number, active: boolean): Promise<any> =>
+  catalogSendJson(adminCatalogUrls.visibility(shopProductId, active), token, 'PATCH');
+
+/** POST /v1/admin/catalog/variants */
+export const catalogAddVariants = (token: string, body: Record<string, any>): Promise<any> =>
+  catalogSendJson(adminCatalogUrls.addVariants(), token, 'POST', body);
+
+/** PUT /v1/admin/catalog/variants/{variantId} */
+export const catalogUpdateVariant = (token: string, variantId: number, body: Record<string, any>): Promise<any> =>
+  catalogSendJson(adminCatalogUrls.updateVariant(variantId), token, 'PUT', body);
+
+/** DELETE /v1/admin/catalog/variants/{variantId} */
+export const catalogDeleteVariant = (token: string, variantId: number): Promise<any> =>
+  catalogSendJson(adminCatalogUrls.deleteVariant(variantId), token, 'DELETE');
+
 export const buildAttributeTypes = (productTypes?: string[], variants: ProductVariantItem[] = []): string[] => {
   const fromProduct = (Array.isArray(productTypes) ? productTypes : []).map(asText).filter(Boolean);
   if (fromProduct.length > 0) return fromProduct;
