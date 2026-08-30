@@ -132,6 +132,17 @@ export const asHttpUrl = (value: any): string | null => {
   return text.startsWith('http') ? text : null;
 };
 
+/** Shopkeeper catalog has no image-upload API — only persist http(s) imageUrl strings. */
+export const pickPersistableImageUrl = (
+  typedUrl?: string | null,
+  localUri?: string | null,
+): string | null => asHttpUrl(typedUrl) || asHttpUrl(localUri);
+
+export const previewImageUri = (
+  typedUrl?: string | null,
+  localUri?: string | null,
+): string | null => asHttpUrl(typedUrl) || asText(localUri) || null;
+
 export const asNumber = (value: any, fallback = 0): number => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
