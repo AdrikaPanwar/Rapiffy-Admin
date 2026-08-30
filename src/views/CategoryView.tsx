@@ -26,8 +26,6 @@ import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BottomNavBar, type AppScreen } from '../components/BottomNavBar';
 import {
-  adminCatalogUrls,
-  catalogAuthHeaders,
   asHttpUrl,
   asNumber,
   asText,
@@ -42,7 +40,6 @@ import {
   findProductById,
   parseMyProductsTree,
   mergeUniqueProducts,
-  readCatalogJson,
   CatalogApiError,
   resolveAttributeTypes,
   buildAddVariantsBody,
@@ -54,7 +51,14 @@ import {
   allProductsFromTree,
   productsAcrossTree,
   filterProductsBySearch,
-  catalogSendJson,
+  catalogGetMyProducts,
+  catalogGetBySubCategory,
+  catalogAddUnlisted,
+  catalogUpdateProduct,
+  catalogSetVisibility,
+  catalogAddVariants,
+  catalogUpdateVariant,
+  catalogDeleteVariant,
   type CatalogProductItem,
   type ProductVariantItem,
   type ServerCategoryGroup,
@@ -507,15 +511,13 @@ const ProductGridItem = React.memo(({ item, onOpenVariants, onEdit, onDelete, on
           </Svg>
         </TouchableOpacity>
 
-        {item.unlisted !== false && (
-          <TouchableOpacity 
-            style={styles.productTrashBadge} 
-            onPress={() => onDelete(item.shopProductId)}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Text style={styles.trashText}>Del</Text>
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity 
+          style={styles.productTrashBadge} 
+          onPress={() => onDelete(item.shopProductId)}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Text style={styles.trashText}>Del</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.blankImageSectionPlaceholder}>
@@ -635,12 +637,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     setIsLoading(true);
     setCatalogLoadError('');
     try {
-      const response = await fetch(adminCatalogUrls.tree(), {
-        method: 'GET',
-        headers: catalogAuthHeaders(resolvedToken)
-      });
-
-      const itemsData = await readCatalogJson(response);
+      const itemsData = await catalogGetMyProducts(resolvedToken);
       const normalizedGroups = parseMyProductsTree(itemsData);
 
       setServerGroups(normalizedGroups);
@@ -670,12 +667,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       const token = overrideToken || authToken || (await AsyncStorage.getItem('user_auth_token'));
       if (!token) return [];
 
-      const response = await fetch(adminCatalogUrls.bySubCategory(subCategoryId), {
-        method: 'GET',
-        headers: catalogAuthHeaders(token.trim())
-      });
-
-      const payload = await readCatalogJson(response);
+      const payload = await catalogGetBySubCategory(token.trim(), subCategoryId);
       return extractProductsFromCategoryPayload(payload);
     } catch (error) {
       console.log('Subcategory catalog fetch failed:', error);
@@ -744,7 +736,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     );
 
     try {
-      await catalogSendJson(adminCatalogUrls.visibility(shopProductId, nextActiveState), fastToken.trim(), 'PATCH');
+      await catalogSetVisibility(fastToken.trim(), shopProductId, nextActiveState);
     } catch (error) {
       const revertActiveState = currentActiveState;
       setServerGroups(prevGroups => (Array.isArray(prevGroups) ? prevGroups : []).map(group => ({
@@ -794,18 +786,38 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
 
   const refreshOpenedProduct = useCallback(async (shopProductId: number, subCategoryId?: number) => {
     const subId = subCategoryId || selectedSubCategoryId;
-    if (!subId) return null;
-    const list = await fetchProductsBySubCategory(subId);
-    if (!list.length) return null;
-    mergeFreshProducts(list);
-    const fresh = findProductById(list, shopProductId);
-    if (fresh) {
-      setVariantSheetProduct((current) => (
-        current && current.shopProductId === fresh.shopProductId ? fresh : current
-      ));
+    if (subId) {
+      const list = await fetchProductsBySubCategory(subId);
+      if (list.length) {
+        mergeFreshProducts(list);
+        const fresh = findProductById(list, shopProductId);
+        if (fresh) {
+          setVariantSheetProduct((current) => (
+            current && current.shopProductId === fresh.shopProductId ? fresh : current
+          ));
+          return fresh;
+        }
+      }
     }
-    return fresh;
-  }, [fetchProductsBySubCategory, mergeFreshProducts, selectedSubCategoryId]);
+    const token = authToken || (await AsyncStorage.getItem('user_auth_token'));
+    if (!token) return null;
+    try {
+      const treePayload = await catalogGetMyProducts(token.trim());
+      const groups = parseMyProductsTree(treePayload);
+      setServerGroups(groups);
+      const all = allProductsFromTree(groups);
+      mergeFreshProducts(all);
+      const fresh = findProductById(all, shopProductId);
+      if (fresh) {
+        setVariantSheetProduct((current) => (
+          current && current.shopProductId === fresh.shopProductId ? fresh : current
+        ));
+      }
+      return fresh;
+    } catch {
+      return null;
+    }
+  }, [authToken, fetchProductsBySubCategory, mergeFreshProducts, selectedSubCategoryId]);
 
   const addVariantFromPopup = useCallback(async (product: CatalogProductItem, variant: ProductVariantItem): Promise<boolean> => {
     const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
@@ -815,25 +827,15 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     }
     setIsSavingVariant(true);
     try {
-      const headers = catalogAuthHeaders(fastToken.trim(), true);
+      const token = fastToken.trim();
       if (!product.hasVariants) {
-        const enableResponse = await fetch(adminCatalogUrls.updateProduct(product.shopProductId), {
-          method: 'PUT',
-          headers,
-          body: JSON.stringify({
-            hasVariants: true,
-            attributeTypes: resolveAttributeTypes(product),
-          }),
+        await catalogUpdateProduct(token, product.shopProductId, {
+          hasVariants: true,
+          attributeTypes: resolveAttributeTypes(product),
         });
-        await readCatalogJson(enableResponse);
       }
 
-      const addResponse = await fetch(adminCatalogUrls.addVariants(), {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(buildAddVariantsBody(product, variant)),
-      });
-      await readCatalogJson(addResponse);
+      await catalogAddVariants(token, buildAddVariantsBody(product, variant));
       const fresh = await refreshOpenedProduct(product.shopProductId, product.subCategoryId);
       if (fresh && Array.isArray(fresh.variants) && fresh.variants.length > 0) {
         setSelectedVariantIndex(fresh.variants.length - 1);
@@ -860,11 +862,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
         style: 'destructive',
         onPress: async () => {
           try {
-            const response = await fetch(adminCatalogUrls.deleteVariant(variantId), {
-              method: 'DELETE',
-              headers: catalogAuthHeaders(fastToken.trim()),
-            });
-            await readCatalogJson(response);
+            await catalogDeleteVariant(fastToken.trim(), variantId);
             setSelectedVariantIndex(0);
             await refreshOpenedProduct(product.shopProductId, product.subCategoryId);
           } catch (error) {
@@ -1052,27 +1050,28 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
 
       if (isEditingMode && targetEditProductId !== null) {
         for (const variantId of removedVariantIds) {
-          await catalogSendJson(adminCatalogUrls.deleteVariant(variantId), token, 'DELETE');
+          await catalogDeleteVariant(token, variantId);
         }
 
-        await catalogSendJson(
-          adminCatalogUrls.updateProduct(targetEditProductId),
+        await catalogUpdateProduct(
           token,
-          'PUT',
-          buildUpdateProductBody(writeFields),
+          targetEditProductId,
+          buildUpdateProductBody({
+            ...writeFields,
+            variants: existingVariants,
+          }),
         );
 
         for (const variant of existingVariants) {
-          await catalogSendJson(
-            adminCatalogUrls.updateVariant(variant.id),
+          await catalogUpdateVariant(
             token,
-            'PUT',
+            variant.id,
             buildVariantRequest(variant, prodBrandInput, prodExpiryDate),
           );
         }
 
         if (newVariants.length > 0) {
-          await catalogSendJson(adminCatalogUrls.addVariants(), token, 'POST', {
+          await catalogAddVariants(token, {
             parentShopProductId: targetEditProductId,
             attributeTypes: attributeTypes.length > 0 ? attributeTypes : ['Flavour'],
             variants: newVariants.map((variant) => buildVariantRequest(variant, prodBrandInput, prodExpiryDate)),
@@ -1088,10 +1087,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
         return;
       }
 
-      await catalogSendJson(
-        adminCatalogUrls.addUnlisted(),
+      await catalogAddUnlisted(
         token,
-        'POST',
         buildAddUnlistedBody(resolvedSubCategoryId as number, {
           ...writeFields,
           variants: safeVariants,
@@ -1116,19 +1113,31 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     const fastToken = authToken || (await AsyncStorage.getItem('user_auth_token'));
     if (!fastToken) return;
 
-    try {
-      setServerGroups(prev => (Array.isArray(prev) ? prev : []).map(group => ({
-        ...group,
-        products: Array.isArray(group.products) ? group.products.filter(p => p.shopProductId !== idToDelete) : []
-      })));
-      setBackendCategoryFilteredProducts(prev => (Array.isArray(prev) ? prev : []).filter(p => p.shopProductId !== idToDelete));
-      
-      await catalogSendJson(adminCatalogUrls.visibility(idToDelete, false), fastToken.trim(), 'PATCH');
-    } catch (err) {
-      const message = err instanceof CatalogApiError ? err.message : 'Could not hide this product.';
-      Alert.alert('Delete failed', message);
-    }
-  }, [authToken]);
+    Alert.alert(
+      'Hide product',
+      'This product will be hidden from the customer app.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Hide',
+          style: 'destructive',
+          onPress: async () => {
+            const previousList = backendCategoryFilteredProducts;
+            setBackendCategoryFilteredProducts((prev) =>
+              (Array.isArray(prev) ? prev : []).filter((p) => p.shopProductId !== idToDelete)
+            );
+            try {
+              await catalogSetVisibility(fastToken.trim(), idToDelete, false);
+            } catch (err) {
+              setBackendCategoryFilteredProducts(previousList);
+              const message = err instanceof CatalogApiError ? err.message : 'Could not hide this product.';
+              Alert.alert('Delete failed', message);
+            }
+          },
+        },
+      ],
+    );
+  }, [authToken, backendCategoryFilteredProducts]);
 
   const addVariantToTempList = useCallback(() => {
     if (!vNameInput.trim() || !vPriceInput.trim()) return;

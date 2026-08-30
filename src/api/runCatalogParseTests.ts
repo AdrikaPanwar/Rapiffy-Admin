@@ -18,6 +18,7 @@ import {
   flattenSubCategories,
   productsAcrossTree,
   filterProductsBySearch,
+  adminCatalogUrls,
 } from './adminCatalog';
 
 const assert = (condition: unknown, message: string) => {
@@ -250,5 +251,37 @@ const namedFromApi = flattenSubCategories(parseMyProductsTree([{
 }]));
 assert(namedFromApi.map((tile) => tile.subCategoryName).join('|') === 'shirt for men|shirt for women', 'category tiles must use API subCategoryName only');
 assert(namedFromApi.every((tile) => tile.subCategoryName !== 'Cloth'), 'parent categoryName must not become a subcategory tile');
+
+assert(adminCatalogUrls.tree().endsWith('/v1/admin/catalog/my-products'), 'GET tree URL mismatch');
+assert(adminCatalogUrls.bySubCategory(18).endsWith('/v1/admin/catalog/my-products/sub-category/18'), 'GET by subcategory URL mismatch');
+assert(adminCatalogUrls.addUnlisted().endsWith('/v1/admin/catalog/add-unlisted'), 'POST add-unlisted URL mismatch');
+assert(adminCatalogUrls.updateProduct(7).endsWith('/v1/admin/catalog/update/7'), 'PUT update product URL mismatch');
+assert(adminCatalogUrls.visibility(7, false).endsWith('/v1/admin/catalog/visibility/7?active=false'), 'PATCH visibility URL mismatch');
+assert(adminCatalogUrls.addVariants().endsWith('/v1/admin/catalog/variants'), 'POST variants URL mismatch');
+assert(adminCatalogUrls.updateVariant(11).endsWith('/v1/admin/catalog/variants/11'), 'PUT variant URL mismatch');
+assert(adminCatalogUrls.deleteVariant(11).endsWith('/v1/admin/catalog/variants/11'), 'DELETE variant URL mismatch');
+
+const editUpdate = buildUpdateProductBody({
+  productName: 'Farm Milk',
+  sellingPrice: 45,
+  hasVariants: true,
+  attributeTypes: ['Flavour'],
+  variants: [{
+    id: 11,
+    variantName: 'Vanilla',
+    brand: 'Amul',
+    unit: '',
+    unitValue: '',
+    mrp: 180,
+    sellingPrice: 145,
+    stockQuantity: 12,
+    thresholdQuantity: 2,
+    imageUrl: null,
+    expiryDate: '2026-12-01',
+    attributes: { Flavour: 'Vanilla' },
+  }],
+});
+assert(editUpdate.variants[0].id === 11, 'PUT update must include saved variant id');
+assert(!('subCategoryId' in editUpdate), 'PUT update must not send subCategoryId');
 
 console.log('catalog parse tests passed');
