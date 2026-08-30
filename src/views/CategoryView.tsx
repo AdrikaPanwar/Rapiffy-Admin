@@ -27,6 +27,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BottomNavBar, type AppScreen } from '../components/BottomNavBar';
 import {
   asHttpUrl,
+  pickPersistableImageUrl,
+  previewImageUri,
   asNumber,
   asText,
   extractProductsFromCategoryPayload,
@@ -80,6 +82,37 @@ const SQUARE_GALLERY_PICKER_OPTIONS: ImagePicker.ImagePickerOptions = {
   aspect: [1, 1],
   quality: 0.6,
 };
+
+function ImageUrlInput({
+  value,
+  onChangeText,
+  placeholder = 'https://cdn.example.com/product.png',
+}: {
+  value: string;
+  onChangeText: (text: string) => void;
+  placeholder?: string;
+}) {
+  const willSave = !!asHttpUrl(value);
+  return (
+    <View>
+      <Text style={styles.inputLabelField}>Image URL</Text>
+      <TextInput
+        style={styles.customTextInputRow}
+        placeholder={placeholder}
+        value={value}
+        onChangeText={onChangeText}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+      />
+      <Text style={[styles.imageUrlHint, willSave && styles.imageUrlHintOk]}>
+        {willSave
+          ? 'This https link will save with the catalog.'
+          : 'Paste an https image link. Phone gallery photos stay on this phone.'}
+      </Text>
+    </View>
+  );
+}
 
 export interface CategoryViewProps {
   onNavigate?: (screen: AppScreen) => void;
@@ -136,6 +169,7 @@ const ProductDetailPopup = ({
   const [newVariantMrp, setNewVariantMrp] = useState('');
   const [newVariantStock, setNewVariantStock] = useState('0');
   const [newVariantImage, setNewVariantImage] = useState<string | null>(null);
+  const [newVariantImageUrl, setNewVariantImageUrl] = useState('');
   const [newAttributeValues, setNewAttributeValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -181,6 +215,7 @@ const ProductDetailPopup = ({
     setNewVariantMrp('');
     setNewVariantStock('0');
     setNewVariantImage(null);
+    setNewVariantImageUrl('');
     setNewAttributeValues({});
   }, [product.shopProductId]);
 
@@ -190,7 +225,8 @@ const ProductDetailPopup = ({
     setNewVariantPrice(selected?.sellingPrice ? String(selected.sellingPrice) : '');
     setNewVariantMrp(selected?.mrp ? String(selected.mrp) : '');
     setNewVariantStock('0');
-    setNewVariantImage(asHttpUrl(product.imageUrl));
+    setNewVariantImage(null);
+    setNewVariantImageUrl(asHttpUrl(product.imageUrl) || '');
     const seed: Record<string, string> = {};
     attributeTypes.forEach((key) => { seed[key] = ''; });
     setNewAttributeValues(seed);
@@ -226,7 +262,7 @@ const ProductDetailPopup = ({
       sellingPrice: parseFloat(newVariantPrice) || 0,
       stockQuantity: parseInt(newVariantStock, 10) || 0,
       thresholdQuantity: 0,
-      imageUrl: asHttpUrl(newVariantImage) || product.imageUrl,
+      imageUrl: pickPersistableImageUrl(newVariantImageUrl, newVariantImage) || product.imageUrl,
       expiryDate: asIsoDate(product.expiryDate),
       shortDescription: product.shortDescription,
       attributes: primaryAttr || Object.keys(attributes).length ? attributes : { [attributeTypes[0]]: newVariantName.trim() },
@@ -390,12 +426,13 @@ const ProductDetailPopup = ({
               <Text style={styles.inputLabelField}>Stock qty</Text>
               <TextInput style={styles.customTextInputRow} placeholder="0" keyboardType="numeric" value={newVariantStock} onChangeText={setNewVariantStock} />
               <TouchableOpacity style={styles.variantImagePreviewContainer} onPress={pickNewVariantImage}>
-                {asHttpUrl(newVariantImage) ? (
-                  <Image source={{ uri: asHttpUrl(newVariantImage) || '' }} style={styles.fullPreviewTargetImage} />
+                {previewImageUri(newVariantImageUrl, newVariantImage) ? (
+                  <Image source={{ uri: previewImageUri(newVariantImageUrl, newVariantImage) || '' }} style={styles.fullPreviewTargetImage} />
                 ) : (
                   <Text style={styles.photoTriggerBtnLabel}>Tap to add variant image</Text>
                 )}
               </TouchableOpacity>
+              <ImageUrlInput value={newVariantImageUrl} onChangeText={setNewVariantImageUrl} />
             </View>
           ) : null}
         </ScrollView>
@@ -588,6 +625,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   const [prodExpiryDate, setProdExpiryDate] = useState<string>('');
   const [prodHasVariants, setProdHasVariants] = useState<boolean>(false);
   const [productImageTarget, setProductImageTarget] = useState<string | null>(null);
+  const [productImageUrlInput, setProductImageUrlInput] = useState('');
 
   // FULL VARIANT INPUT STATES
   const [vNameInput, setVNameInput] = useState<string>('');
@@ -600,6 +638,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
   const [vStockQty, setVStockQty] = useState<string>('0');
   const [vThresholdQty, setVThresholdQty] = useState<string>('0');
   const [variantImageTarget, setVariantImageTarget] = useState<string | null>(null);
+  const [variantImageUrlInput, setVariantImageUrlInput] = useState('');
   
   const [tempVariantsList, setTempVariantsList] = useState<ProductVariantItem[]>([]);
 
@@ -926,12 +965,14 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     setProdExpiryDate(asIsoDate(item.expiryDate));
     setProdHasVariants(!!item.hasVariants || (Array.isArray(item.variants) && item.variants.length > 0));
     setProductImageTarget(asHttpUrl(item.imageUrl));
+    setProductImageUrlInput(asHttpUrl(item.imageUrl) || '');
     setProdAttributeTypesInput(Array.isArray(item.attributeTypes) ? item.attributeTypes.filter(Boolean).join(', ') : '');
     setFormSubCategoryId(item.subCategoryId || selectedSubCategoryId || flattenSubCategories(serverGroups)[0]?.subCategoryId || null);
     
     setTempVariantsList(Array.isArray(item.variants) ? item.variants : []);
     setRemovedVariantIds([]);
     setVariantImageTarget(null);
+    setVariantImageUrlInput('');
     
     InteractionManager.runAfterInteractions(() => {
       setIsProductModalOpen(true);
@@ -952,7 +993,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     setProdExpiryDate('');
     setProdHasVariants(false);
     setProductImageTarget(null);
+    setProductImageUrlInput('');
     setVariantImageTarget(null);
+    setVariantImageUrlInput('');
     
     setVNameInput('');
     setVBrandInput('');
@@ -987,7 +1030,9 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     setProdExpiryDate('');
     setProdHasVariants(false);
     setProductImageTarget(null);
+    setProductImageUrlInput('');
     setVariantImageTarget(null);
+    setVariantImageUrlInput('');
     setVNameInput('');
     setVBrandInput('');
     setVExpiryDate('');
@@ -1034,7 +1079,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       shortDescription: prodShortDesc.trim(),
       longDescription: prodLongDesc.trim(),
       brand: prodBrandInput.trim(),
-      imageUrl: asHttpUrl(productImageTarget),
+      imageUrl: pickPersistableImageUrl(productImageUrlInput, productImageTarget),
       mrp: parseFloat(prodMrpInput) || parseFloat(prodPriceInput) || 0,
       thresholdQuantity: parseInt(prodThresholdQty, 10) || 0,
       unit: prodUnitType.trim(),
@@ -1157,7 +1202,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
       sellingPrice: parseFloat(vPriceInput) || 0,
       stockQuantity: parseInt(vStockQty, 10) || 0,
       thresholdQuantity: parseInt(vThresholdQty, 10) || 0,
-      imageUrl: asHttpUrl(variantImageTarget) || asHttpUrl(productImageTarget),
+      imageUrl: pickPersistableImageUrl(variantImageUrlInput, variantImageTarget) || pickPersistableImageUrl(productImageUrlInput, productImageTarget),
       expiryDate: asIsoDate(vExpiryDate) || asIsoDate(prodExpiryDate),
       attributes,
     }]);
@@ -1172,7 +1217,8 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
     setVStockQty('0');
     setVThresholdQty('0');
     setVariantImageTarget(null);
-  }, [vNameInput, vBrandInput, prodBrandInput, vUnitType, prodUnitType, vUnitVal, prodUnitVal, vMrpInput, prodMrpInput, vPriceInput, vStockQty, vThresholdQty, variantImageTarget, productImageTarget, vExpiryDate, prodExpiryDate]);
+    setVariantImageUrlInput('');
+  }, [vNameInput, vBrandInput, prodBrandInput, vUnitType, prodUnitType, vUnitVal, prodUnitVal, vMrpInput, prodMrpInput, vPriceInput, vStockQty, vThresholdQty, variantImageTarget, variantImageUrlInput, productImageTarget, productImageUrlInput, vExpiryDate, prodExpiryDate]);
 
   const deleteVariantFromTempList = useCallback((indexToRemove: number) => {
     setTempVariantsList(prev => {
@@ -1429,12 +1475,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
 
               <Text style={styles.inputLabelField}>Product Image *</Text>
               <TouchableOpacity style={styles.imageSelectorPreviewContainer} onPress={pickImageFromDeviceGallery}>
-                {productImageTarget ? (
-                  <Image source={{ uri: productImageTarget }} style={styles.fullPreviewTargetImage} />
+                {previewImageUri(productImageUrlInput, productImageTarget) ? (
+                  <Image source={{ uri: previewImageUri(productImageUrlInput, productImageTarget) || '' }} style={styles.fullPreviewTargetImage} />
                 ) : (
                   <Text style={styles.photoTriggerBtnLabel}>Click to select photo from Phone Gallery</Text>
                 )}
               </TouchableOpacity>
+              <ImageUrlInput value={productImageUrlInput} onChangeText={setProductImageUrlInput} />
 
               <Text style={styles.inputLabelField}>Product Name *</Text>
               <TextInput style={styles.customTextInputRow} placeholder="productName" value={prodNameInput} onChangeText={setProdNameInput} />
@@ -1535,12 +1582,13 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
 
                   <Text style={styles.inputLabelField}>Variant Image</Text>
                   <TouchableOpacity style={styles.variantImagePreviewContainer} onPress={pickVariantImageFromDeviceGallery}>
-                    {variantImageTarget ? (
-                      <Image source={{ uri: variantImageTarget }} style={styles.fullPreviewTargetImage} />
+                    {previewImageUri(variantImageUrlInput, variantImageTarget) ? (
+                      <Image source={{ uri: previewImageUri(variantImageUrlInput, variantImageTarget) || '' }} style={styles.fullPreviewTargetImage} />
                     ) : (
                       <Text style={styles.photoTriggerBtnLabel}>Click to select variant photo from Phone Gallery</Text>
                     )}
                   </TouchableOpacity>
+                  <ImageUrlInput value={variantImageUrlInput} onChangeText={setVariantImageUrlInput} />
 
                   <Text style={styles.inputLabelField}>Variant Name *</Text>
                   <TextInput style={styles.customTextInputRow} placeholder="variantName" value={vNameInput} onChangeText={setVNameInput} />
@@ -1805,6 +1853,8 @@ const styles = StyleSheet.create({
   },
   fullPreviewTargetImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   photoTriggerBtnLabel: { fontSize: 11, color: '#D2691E', fontWeight: '700', textAlign: 'center', paddingHorizontal: 6 },
+  imageUrlHint: { fontSize: 10, color: '#A89685', marginTop: 4, marginBottom: 2, lineHeight: 14 },
+  imageUrlHintOk: { color: '#2E7D32' },
   customTextInputRow: { height: 44, borderWidth: 1, borderColor: '#E6D4BF', borderRadius: 8, paddingHorizontal: 12, color: '#2B1E1A', backgroundColor: '#FFFBF7', fontSize: 13 },
   submitNewProductBtn: { backgroundColor: '#D2691E', height: 46, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginTop: 10, marginBottom: 10 },
   submitCategoryLabel: { color: '#FFFBF7', fontSize: 13, fontWeight: '700' },

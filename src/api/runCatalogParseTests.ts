@@ -19,6 +19,8 @@ import {
   productsAcrossTree,
   filterProductsBySearch,
   adminCatalogUrls,
+  pickPersistableImageUrl,
+  previewImageUri,
 } from './adminCatalog';
 
 const assert = (condition: unknown, message: string) => {
@@ -191,6 +193,42 @@ assert(addUnlisted.subCategoryId === 18, 'POST add-unlisted requires subCategory
 assert(addUnlisted.productName === 'Farm Milk', 'add-unlisted productName mapping failed');
 assert(addUnlisted.expiryDate == null, 'invalid expiryDate must not be sent');
 assert(addUnlisted.imageUrl == null, 'non-http imageUrl must not be sent');
+
+assert(
+  pickPersistableImageUrl('https://cdn.example.com/milk.png', 'file://local-photo.jpg') === 'https://cdn.example.com/milk.png',
+  'typed https image URL must win over a gallery file',
+);
+assert(
+  pickPersistableImageUrl('  https://cdn.example.com/milk.png  ', null) === 'https://cdn.example.com/milk.png',
+  'typed https image URL must trim and persist',
+);
+assert(
+  pickPersistableImageUrl('', 'file://local-photo.jpg') == null,
+  'gallery file:// must not persist',
+);
+assert(
+  pickPersistableImageUrl('content://media/1', 'ph://asset') == null,
+  'device gallery URIs must not persist',
+);
+assert(
+  pickPersistableImageUrl('', 'https://cdn.example.com/from-web.png') === 'https://cdn.example.com/from-web.png',
+  'http gallery uri may persist',
+);
+assert(
+  previewImageUri('', 'file://local-photo.jpg') === 'file://local-photo.jpg',
+  'gallery file may preview locally',
+);
+assert(
+  previewImageUri('https://cdn.example.com/milk.png', 'file://local-photo.jpg') === 'https://cdn.example.com/milk.png',
+  'typed https URL must preview over gallery file',
+);
+
+const addWithUrl = buildAddUnlistedBody(18, {
+  productName: 'Farm Milk',
+  sellingPrice: 42,
+  imageUrl: pickPersistableImageUrl('https://cdn.example.com/milk.png', 'file://local-photo.jpg'),
+});
+assert(addWithUrl.imageUrl === 'https://cdn.example.com/milk.png', 'typed https imageUrl must be sent on add-unlisted');
 
 const updateBody = buildUpdateProductBody({
   productName: 'Farm Milk',
